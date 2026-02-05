@@ -21,6 +21,13 @@ from .reconnect import ReconnectManager, ReconnectConfig
 from .events import EventBus, HookManager, HookContext
 from .reliability import retry_async, RetryPolicy, CircuitBreaker
 from .concurrency import gather_limited
+from .normalization import normalize_order_update, normalize_position_update
+from .model_bridge import (
+    ModelEventBridge,
+    NormalizedDeal,
+    NormalizedExecutionError,
+)
+from .state_cache import TradingStateCacheUpdater
 from .typed_events import (
     TickEvent,
     ExecutionEvent,
@@ -63,6 +70,12 @@ __all__ = [
     "RetryPolicy",
     "CircuitBreaker",
     "gather_limited",
+    "normalize_order_update",
+    "normalize_position_update",
+    "ModelEventBridge",
+    "NormalizedDeal",
+    "NormalizedExecutionError",
+    "TradingStateCacheUpdater",
 
     # Typed events
     "TickEvent",

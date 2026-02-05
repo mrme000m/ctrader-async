@@ -67,6 +67,15 @@ async def test_bulk_ops_call_underlying_methods(monkeypatch):
     monkeypatch.setattr(api, "modify_position", modify_position)
     await api.modify_positions_bulk([(1, 1.0, None), (2, None, 2.0)], concurrency=2)
 
+    amended = []
+
+    async def modify_order(oid, **kwargs):
+        amended.append((oid, kwargs))
+
+    monkeypatch.setattr(api, "modify_order", modify_order)
+    await api.modify_orders_bulk([(10, None, 1.1, None, None, None, None)], concurrency=2)
+
     assert set(closed) == {1, 2, 3}
     assert set(cancelled) == {10, 11}
     assert set(modified) == {(1, 1.0, None), (2, None, 2.0)}
+    assert amended and amended[0][0] == 10

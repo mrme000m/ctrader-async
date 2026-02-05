@@ -49,6 +49,9 @@ class CTraderClient:
         access_token: str,
         account_id: int,
         host_type: str = "demo",
+        *,
+        auto_model_bridge: bool = False,
+        auto_cache_updater: bool = False,
         **kwargs
     ):
         """Initialize cTrader client.
@@ -103,6 +106,12 @@ class CTraderClient:
         from .utils import EventBus, HookManager
         self.events = EventBus()
         self.hooks = HookManager()
+
+        # Optional model normalization bridge + cache updater
+        self.model_bridge = None
+        self.state_cache_updater = None
+        self._auto_model_bridge = bool(auto_model_bridge)
+        self._auto_cache_updater = bool(auto_cache_updater)
         
         # High-level APIs (initialized after connection)
         self.trading: Optional[TradingAPI] = None
@@ -241,7 +250,24 @@ class CTraderClient:
             self.trading.hooks = self.hooks
             self.market_data.hooks = self.hooks
             self.account.hooks = self.hooks
-            
+
+            # Prepare (but do not auto-enable) model event bridge
+            from .utils.model_bridge import ModelEventBridge
+            self.model_bridge = ModelEventBridge(self.events, self.symbols, self.trading)
+
+            # Prepare (but do not auto-enable) trading cache updater
+            from .utils.state_cache import TradingStateCacheUpdater
+            self.state_cache_updater = TradingStateCacheUpdater(self.events, self.trading)
+
+            # Auto-enable if requested
+            if self._auto_model_bridge and self.model_bridge:
+                self.model_bridge.enable()
+            if self._auto_cache_updater and self.state_cache_updater:
+                # Cache updater assumes model events exist
+                if not self._auto_model_bridge and self.model_bridge:
+                    self.model_bridge.enable()
+                self.state_cache_updater.enable()
+
             logger.info("Client ready")
         
         except Exception as e:
@@ -255,6 +281,7 @@ class CTraderClient:
             return
 
         from .transport import ProtocolFraming
+        from .models import Tick
         from .utils.typed_events import TickEvent, execution_events_from_payload
         from .messages.OpenApiMessages_pb2 import ProtoOASpotEvent, ProtoOAExecutionEvent
 

@@ -733,6 +733,105 @@ class TradingAPI:
             logger.error(f"Modify position error: {e}", exc_info=True)
             raise TradingError(f"Modify position failed: {e}")
     
+    async def modify_order(
+        self,
+        order_id: int,
+        *,
+        volume: float | None = None,
+        limit_price: float | None = None,
+        stop_price: float | None = None,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        expiration_timestamp: int | None = None,
+        slippage_in_points: int | None = None,
+        relative_stop_loss: int | None = None,
+        relative_take_profit: int | None = None,
+        guaranteed_stop_loss: bool | None = None,
+        trailing_stop_loss: bool | None = None,
+        stop_trigger_method: OrderTriggerMethod | None = None,
+    ):
+        """Amend a pending order.
+
+        Supports price/SL/TP/volume/expiration plus advanced flags supported by
+        `ProtoOAAmendOrderReq` (slippage, relative SL/TP, guaranteed/trailing SL,
+        stop trigger method).
+
+        Note: price fields are expected in *absolute price* terms.
+        """
+        await self._rate_limiter.acquire()
+
+        try:
+            from ..messages.OpenApiMessages_pb2 import ProtoOAAmendOrderReq
+
+            req = ProtoOAAmendOrderReq()
+            req.ctidTraderAccountId = self.config.account_id
+            req.orderId = int(order_id)
+
+            # Volume in protocol units is symbol-dependent. If caller passes volume, we attempt conversion
+            # based on cached order symbol name.
+            if volume is not None:
+                order = None
+                async with self._orders_lock:
+                    order = next((o for o in self._orders if o.id == order_id), None)
+                if order and order.symbol_name:
+                    symbol_info = await self.symbols.get_symbol(order.symbol_name)
+                    if symbol_info:
+                        req.volume = symbol_info.lots_to_protocol_volume(volume)
+                    else:
+                        req.volume = int(round(volume * 100.0))
+                else:
+                    req.volume = int(round(volume * 100.0))
+
+            if limit_price is not None:
+                req.limitPrice = float(limit_price)
+            if stop_price is not None:
+                req.stopPrice = float(stop_price)
+            if stop_loss is not None:
+                req.stopLoss = float(stop_loss)
+            if take_profit is not None:
+                req.takeProfit = float(take_profit)
+            if expiration_timestamp is not None:
+                req.expirationTimestamp = int(expiration_timestamp)
+
+            if slippage_in_points is not None:
+                req.slippageInPoints = int(slippage_in_points)
+            if relative_stop_loss is not None:
+                req.relativeStopLoss = int(relative_stop_loss)
+            if relative_take_profit is not None:
+                req.relativeTakeProfit = int(relative_take_profit)
+            if guaranteed_stop_loss is not None:
+                req.guaranteedStopLoss = bool(guaranteed_stop_loss)
+            if trailing_stop_loss is not None:
+                req.trailingStopLoss = bool(trailing_stop_loss)
+            if stop_trigger_method is not None:
+                from ..messages.OpenApiModelMessages_pb2 import ProtoOAOrderTriggerMethod
+
+                req.stopTriggerMethod = stop_trigger_method.to_proto(ProtoOAOrderTriggerMethod)
+
+            response = await self.protocol.send_request(
+                req,
+                timeout=self.config.request_timeout,
+                request_type="AmendOrder",
+            )
+
+            if self._is_error_response(response):
+                error_code = getattr(response, "errorCode", "UNKNOWN")
+                error_desc = getattr(response, "description", "")
+                raise OrderError(
+                    f"Modify order failed: {error_code}",
+                    code=error_code,
+                    description=error_desc,
+                )
+
+            logger.info(
+                f"Order modified: {order_id}, vol={volume}, limit={limit_price}, stop={stop_price}, SL={stop_loss}, TP={take_profit}"
+            )
+        except OrderError:
+            raise
+        except Exception as e:
+            logger.error(f"Modify order error: {e}", exc_info=True)
+            raise OrderError(f"Modify order failed: {e}")
+
     async def cancel_order(self, order_id: int):
         """Cancel a pending order.
         
@@ -876,6 +975,48 @@ class TradingAPI:
             return await self.cancel_order(oid)
 
         factories = [lambda oid=oid: make(oid) for oid in order_ids]
+        return await gather_limited(factories, limit=concurrency)
+
+    async def modify_orders_bulk(
+        self,
+        modifications: list[
+            tuple[
+                int,
+                float | None,
+                float | None,
+                float | None,
+                float | None,
+                float | None,
+                int | None,
+            ]
+        ],
+        *,
+        concurrency: int = 10,
+    ):
+        """Amend multiple orders with bounded concurrency.
+
+        Args:
+            modifications: list of tuples:
+                (order_id, volume, limit_price, stop_price, stop_loss, take_profit, expiration_timestamp)
+            concurrency: parallelism limit
+        """
+        from ..utils.concurrency import gather_limited
+
+        async def make(oid: int, vol, lp, sp, sl, tp, exp):
+            return await self.modify_order(
+                oid,
+                volume=vol,
+                limit_price=lp,
+                stop_price=sp,
+                stop_loss=sl,
+                take_profit=tp,
+                expiration_timestamp=exp,
+            )
+
+        factories = [
+            lambda oid=oid, vol=vol, lp=lp, sp=sp, sl=sl, tp=tp, exp=exp: make(oid, vol, lp, sp, sl, tp, exp)
+            for (oid, vol, lp, sp, sl, tp, exp) in modifications
+        ]
         return await gather_limited(factories, limit=concurrency)
 
     async def modify_positions_bulk(

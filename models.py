@@ -341,31 +341,23 @@ class Candle:
 
 @dataclass
 class Deal:
-    """Executed trade deal.
-    
-    Attributes:
-        deal_id: Deal identifier
-        position_id: Associated position ID
-        order_id: Associated order ID
-        symbol_id: Symbol identifier
-        symbol_name: Symbol name
-        side: Trade side
-        volume: Deal volume in lots
-        execution_price: Execution price
-        commission: Commission charged
-        swap: Swap charged
-        pnl: Profit/Loss
-        timestamp: Execution timestamp
+    """Executed trade deal (fill).
+
+    This model is meant to be convenient for bots/agents.
+
+    Notes:
+    - When emitted from live execution events, not all fields are always available.
+      For that reason, most fields are optional with sensible defaults.
     """
-    
+
     deal_id: int
-    position_id: int
-    order_id: int
-    symbol_id: int
-    symbol_name: str
-    side: str
-    volume: float
-    execution_price: float
+    position_id: Optional[int] = None
+    order_id: Optional[int] = None
+    symbol_id: Optional[int] = None
+    symbol_name: Optional[str] = None
+    side: Optional[str] = None
+    volume: Optional[float] = None  # in lots
+    execution_price: Optional[float] = None
     commission: float = 0.0
     swap: float = 0.0
     pnl: float = 0.0

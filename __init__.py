@@ -38,6 +38,7 @@ from .config import ClientConfig
 from .models import (
     Position,
     Order,
+    Deal,
     Symbol,
     AccountInfo,
     Tick,
@@ -80,6 +81,12 @@ from .utils import (
     PositionUpdateEvent,
     DealEvent,
     gather_limited,
+    normalize_order_update,
+    normalize_position_update,
+    ModelEventBridge,
+    NormalizedDeal,
+    NormalizedExecutionError,
+    TradingStateCacheUpdater,
 )
 
 __all__ = [
@@ -95,6 +102,7 @@ __all__ = [
     # Data models
     "Position",
     "Order",
+    "Deal",
     "Symbol",
     "AccountInfo",
     "Tick",
@@ -133,4 +141,10 @@ __all__ = [
     "PositionUpdateEvent",
     "DealEvent",
     "gather_limited",
+    "normalize_order_update",
+    "normalize_position_update",
+    "ModelEventBridge",
+    "NormalizedDeal",
+    "NormalizedExecutionError",
+    "TradingStateCacheUpdater",
 ]
