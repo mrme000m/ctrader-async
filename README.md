@@ -61,6 +61,64 @@ async def main():
 asyncio.run(main())
 ```
 
+## Production usage patterns & best practices
+
+### 1) Client lifecycle and task supervision
+
+- Prefer `async with CTraderClient(...) as client:` so the transport/protocol tasks are cleaned up on exit.
+- Keep long-running background tasks in an `asyncio.TaskGroup` (Py 3.11+) or track tasks and cancel them on shutdown.
+- Treat `asyncio.CancelledError` as a normal shutdown path and avoid swallowing it.
+
+### 2) Backpressure and queues
+
+This library uses bounded queues in multiple places:
+
+- Protocol inbound queue (`ClientConfig.inbound_queue_size`)
+- Tick stream queues (`ClientConfig.tick_queue_size`)
+
+If your consumer is slower than the incoming stream:
+
+- Increase queue sizes for short bursts
+- Or enable dropping to stay “latest only”:
+  - `ClientConfig.drop_inbound_when_full=True` for inbound protocol frames
+  - Use `MultiTickStream(..., coalesce_latest=True)` for ticks
+
+### 3) Avoid doing I/O per tick
+
+In streaming loops, avoid doing network I/O per tick (e.g., repeated symbol lookups). Cache symbol metadata once before entering the loop:
+
+```python
+symbol = await client.symbols.get_symbol("EURUSD")
+pip_size = symbol.pip_size if symbol else 0.0001
+
+async with client.market_data.stream_ticks("EURUSD") as stream:
+    async for tick in stream:
+        spread_pips = (tick.ask - tick.bid) / pip_size
+        ...
+```
+
+### 4) Reconnect + retry
+
+- Reconnect is handled in `CTraderClient` via `utils.ReconnectManager`.
+- For idempotent operations (e.g., refetching positions), use `utils.retry_async` with a conservative policy.
+
+```python
+from ctrader_async.utils import retry_async, RetryPolicy
+
+policy = RetryPolicy(max_attempts=5, base_delay=0.2, max_delay=3.0)
+
+positions = await retry_async(lambda: client.trading.get_positions(), policy=policy)
+```
+
+### 5) Prefer event-driven state over polling
+
+For bots, enable:
+
+- `ModelEventBridge` to translate execution events into `models.*`
+- `TradingStateCacheUpdater` to keep `TradingAPI` caches warm
+
+Then use `client.events` subscriptions instead of polling `get_positions()` every second.
+
 ## Streaming Market Data
 
 ```python
@@ -119,22 +177,128 @@ async def get_historical_data():
             print(f"{candle.timestamp}: O={candle.open} H={candle.high} L={candle.low} C={candle.close}")
 ```
 
-### Event Callbacks
+### Events (recommended patterns)
+
+The client exposes a lightweight async `EventBus` at `client.events`. This is the preferred integration point for bots/agents, logging, and state synchronization.
+
+There are a few layers of events:
+
+- `protobuf.envelope`: raw protobuf envelope (advanced / low-level)
+- `execution.*`: typed execution lifecycle events derived from `ProtoOAExecutionEvent`
+- `model.*`: normalized `ctrader_async.models` dataclasses (optional bridge)
 
 ```python
-async def handle_events():
-    async with CTraderClient(...) as client:
-        # Register event handlers
-        @client.on_position_opened
-        async def on_position(position):
-            print(f"New position: {position.id}")
-        
-        @client.on_position_closed
-        async def on_close(position):
-            print(f"Position closed: {position.id}, PnL: {position.pnl_net_unrealized}")
-        
-        # Keep running
+import asyncio
+from ctrader_async import CTraderClient
+
+async def main():
+    async with CTraderClient.from_env(auto_enable_features=True) as client:
+        # 1) Subscribe to raw envelopes (debug / observability)
+        client.events.on("protobuf.envelope", lambda env: None)
+
+        # 2) Subscribe to normalized domain models (stable interface)
+        async def on_order(order):
+            print("order update", order.id, order.symbol_name, order.volume)
+
+        async def on_position(pos):
+            print("position update", pos.id, pos.symbol_name, pos.volume)
+
+        async def on_deal(deal):
+            print("deal", deal.deal_id, deal.symbol_name, deal.volume)
+
+        client.events.on("model.order", on_order)
+        client.events.on("model.position", on_position)
+        client.events.on("model.deal", on_deal)
+
+        # keep process alive
         await asyncio.Event().wait()
+
+asyncio.run(main())
+```
+
+To enable the model bridge + state cache updater automatically, construct the client with `auto_enable_features=True` (see `CTraderClient`), or enable them manually:
+
+```python
+from ctrader_async.utils import ModelEventBridge, TradingStateCacheUpdater
+
+bridge = ModelEventBridge(client.events, client.symbols, client.trading)
+bridge.enable()
+
+updater = TradingStateCacheUpdater(client.events, client.trading)
+updater.enable()
+```
+
+## Observability & debugging
+
+### Logging
+
+The library uses Python's standard `logging` module. For troubleshooting, enable debug logs for the relevant namespaces:
+
+```python
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("ctrader_async").setLevel(logging.DEBUG)
+# Or narrow it down:
+# logging.getLogger("ctrader_async.protocol").setLevel(logging.DEBUG)
+# logging.getLogger("ctrader_async.transport").setLevel(logging.DEBUG)
+```
+
+### Correlation IDs (`clientMsgId`)
+
+Most request/response flows are correlated via `clientMsgId` (a UUID) at the protobuf envelope layer.
+
+You can observe them via:
+- debug logs in `ProtocolHandler.send_request()`
+- hooks (below)
+
+### Hook points (metrics, tracing, risk gates)
+
+The client owns a `HookManager` at `client.hooks`. Internally, `ProtocolHandler.send_request()` can call these named hooks:
+
+- `protocol.pre_send_request`
+- `protocol.post_send_request`
+- `protocol.post_response`
+
+Example: record timings and sizes for every request:
+
+```python
+import time
+from ctrader_async import CTraderClient
+
+async def main():
+    async with CTraderClient.from_env() as client:
+        inflight: dict[str, float] = {}
+
+        async def pre(ctx):
+            inflight[ctx.data["request_type"]] = time.perf_counter()
+
+        async def post_send(ctx):
+            # request_type, client_msg_id, bytes_sent
+            pass
+
+        async def post_resp(ctx):
+            rt = ctx.data["request_type"]
+            dt = time.perf_counter() - inflight.pop(rt, time.perf_counter())
+            print("request", rt, "took", dt)
+
+        client.hooks.register("protocol.pre_send_request", pre)
+        client.hooks.register("protocol.post_send_request", post_send)
+        client.hooks.register("protocol.post_response", post_resp)
+
+        # any API call will now trigger hooks
+        await client.account.get_info()
+```
+
+### Raw event tap
+
+For deep debugging (or building custom decoders), subscribe to `protobuf.envelope`:
+
+```python
+async def log_envelope(env):
+    print("payloadType=", env.payloadType, "clientMsgId=", getattr(env, "clientMsgId", ""))
+
+client.events.on("protobuf.envelope", log_envelope)
 ```
 
 ## Architecture
@@ -155,7 +319,9 @@ ctrader_async/
 Configuration can be provided via:
 1. Constructor arguments
 2. Environment variables
-3. Configuration file
+3. A config file (via `ClientConfig.from_file`)
+
+A `CTraderClient.from_env()` helper exists and is the recommended default for deployments (12-factor style).
 
 ### Environment Variables
 
@@ -210,6 +376,8 @@ Main client class providing access to all APIs.
 **Methods:**
 - `connect()` - Establish connection and authenticate
 - `disconnect()` - Close connection gracefully
+- `from_env()` - Build client from environment variables (`CTRADER_*`)
+- `from_config()` - Build client from a `ClientConfig`
 - Context manager support: `async with CTraderClient(...) as client:`
 
 **Properties:**
@@ -236,18 +404,14 @@ Main client class providing access to all APIs.
 ### Market Data API
 
 **Methods:**
-- `stream_ticks()` - Stream real-time tick data (async iterator)
+- `stream_ticks()` - Stream real-time tick data for one symbol (async iterator)
+- `stream_ticks_multi()` - Stream ticks for multiple symbols (supports coalescing latest)
 - `get_candles()` - Get historical candlestick data
-- `get_quote()` - Get current bid/ask quote
-- `subscribe_to_events()` - Subscribe to market events
 
 ### Account API
 
 **Methods:**
-- `get_info()` - Get account information
-- `get_positions_summary()` - Get positions summary
-- `get_orders_summary()` - Get orders summary
-- `get_history()` - Get trade history
+- `get_info()` - Get account information (cached; `refresh=True` forces server fetch)
 
 ### Symbols API
 
@@ -271,12 +435,12 @@ pytest --cov=ctrader_async tests/
 ## Examples
 
 See the `examples/` directory for complete working examples:
-- `basic_usage.py` - Basic connection and trading
-- `market_orders.py` - Different order types
-- `streaming_ticks.py` - Real-time data streaming
-- `position_management.py` - Managing positions
-- `event_handling.py` - Event-driven patterns
-- `advanced_patterns.py` - Advanced use cases
+- `basic_usage.py` - Basic connection and account/symbol queries
+- `market_orders.py` - Placing and managing orders/positions
+- `streaming_ticks.py` - Real-time data streaming (single symbol)
+- `multi_symbol_ticks.py` - Real-time multi-symbol streaming (coalescing latest)
+- `historical_data.py` - Fetching historical candles
+- `event_driven_bot.py` - Event-driven bot skeleton using `client.events`
 
 ## Requirements
 

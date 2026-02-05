@@ -239,6 +239,12 @@ class ProtocolHandler:
                         # Drop oldest to keep more recent messages
                         try:
                             _ = self._inbound_queue.get_nowait()
+                            # Keep queue accounting consistent for .join() users
+                            try:
+                                self._inbound_queue.task_done()
+                            except ValueError:
+                                # task_done called too many times; ignore
+                                pass
                         except asyncio.QueueEmpty:
                             pass
                         try:

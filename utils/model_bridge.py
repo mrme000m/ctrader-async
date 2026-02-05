@@ -12,17 +12,13 @@ This is optional and must be enabled explicitly.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any
 
 from .events import EventBus
 from .typed_events import OrderUpdateEvent, PositionUpdateEvent, DealEvent, ExecutionErrorEvent
 from .normalization import normalize_order_update, normalize_position_update
-
-
-from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,13 +28,13 @@ class NormalizedDeal:
     position_id: int | None
     symbol_id: int | None
     # Keep original deal payload for advanced consumers
-    deal: any
+    deal: Any
 
 
 @dataclass(frozen=True, slots=True)
 class NormalizedExecutionError:
     error_code: str
-    payload: any
+    payload: Any
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +42,8 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ModelEventBridge:
     events: EventBus
-    symbols: any
-    trading: any
+    symbols: Any
+    trading: Any
 
     _enabled: bool = False
 

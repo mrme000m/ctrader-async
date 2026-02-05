@@ -34,6 +34,8 @@ from ctrader_async.utils.errors import (
     OrderError,
 )
 
+from .utils_integration_debug import snapshot_client_state, dump_debug
+
 
 # Mark all tests as integration tests
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -461,7 +463,10 @@ class TestPositionManagement:
         # Get positions
         positions = await client.trading.get_positions()
         
-        assert len(positions) > 0
+        assert len(positions) > 0, dump_debug(
+            "expected positions after placing market order",
+            {"positions": [getattr(p, "id", None) for p in positions], "cache": snapshot_client_state(client)},
+        )
         assert any(p.id == position.id for p in positions)
         
         print(f"\n✅ Found {len(positions)} open position(s)")
@@ -512,7 +517,10 @@ class TestOrderManagement:
         # Get orders
         orders = await client.trading.get_orders()
         
-        assert len(orders) > 0
+        assert len(orders) > 0, dump_debug(
+            "expected orders after placing limit order",
+            {"orders": [getattr(o, "id", None) for o in orders], "cache": snapshot_client_state(client)},
+        )
         
         print(f"\n✅ Found {len(orders)} pending order(s)")
         
@@ -559,7 +567,10 @@ class TestMarketData:
             count=10
         )
         
-        assert len(candles) > 0
+        assert len(candles) > 0, dump_debug(
+            "expected candle history",
+            {"candle_count": len(candles), "cache": snapshot_client_state(client)},
+        )
         assert all(c.open > 0 for c in candles)
         assert all(c.high >= c.low for c in candles)
         
@@ -583,7 +594,10 @@ class TestMarketData:
                 if time.time() - start_time > 5 or tick_count >= 10:
                     break
         
-        assert tick_count > 0
+        assert tick_count > 0, dump_debug(
+            "expected tick stream events",
+            {"tick_count": tick_count, "cache": snapshot_client_state(client)},
+        )
         print(f"✅ Received {tick_count} ticks")
 
 

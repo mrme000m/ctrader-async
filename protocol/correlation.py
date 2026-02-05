@@ -224,20 +224,26 @@ class RequestCorrelator:
             for msg_id, pending in list(self._pending.items()):
                 elapsed = now - pending.created_at_monotonic
                 if elapsed > pending.timeout:
-                    # Remove immediately to avoid racing with resolve_response
+                    # Pop under the lock so resolve_response can't win the race.
                     self._pending.pop(msg_id, None)
-                    timed_out.append((msg_id, pending.timeout, pending.request_type))
-        
+                    timed_out.append((msg_id, pending))
+
         # Reject timed-out requests outside the lock
-        for msg_id, timeout, request_type in timed_out:
+        for msg_id, pending in timed_out:
+            if pending.future.done():
+                continue
+
             error = asyncio.TimeoutError(
-                f"Request timed out after {timeout}s (type={request_type})"
+                f"Request timed out after {pending.timeout}s (type={pending.request_type})"
             )
-            # best-effort: future might already be resolved/cancelled
-            await self.reject_request(msg_id, error)
+            try:
+                pending.future.set_exception(error)
+            except Exception:
+                # best-effort: future might already be resolved/cancelled
+                pass
 
             logger.warning(
-                f"Request timed out: id={msg_id}, type={request_type}, timeout={timeout}s"
+                f"Request timed out: id={msg_id}, type={pending.request_type}, timeout={pending.timeout}s"
             )
     
     def __repr__(self) -> str:
