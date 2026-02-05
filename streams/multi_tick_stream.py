@@ -172,6 +172,18 @@ class MultiTickStream:
                 self._queue.task_done()
             except asyncio.QueueEmpty:
                 pass
+
+            # Best-effort metrics/event emission (do not block tick handler)
+            try:
+                asyncio.create_task(
+                    self.protocol.events.emit(
+                        "stream.tick_dropped",
+                        {"stream": "MultiTickStream", "reason": "queue_full"},
+                    )
+                )
+            except Exception:
+                pass
+
             try:
                 self._queue.put_nowait(tick)
             except asyncio.QueueFull:

@@ -163,6 +163,17 @@ class TickStream:
                     self._queue.task_done()
                 except asyncio.QueueEmpty:
                     pass
+
+                try:
+                    asyncio.create_task(
+                        self.protocol.events.emit(
+                            "stream.tick_dropped",
+                            {"stream": "TickStream", "symbol": self.symbol, "reason": "queue_full"},
+                        )
+                    )
+                except Exception:
+                    pass
+
                 try:
                     self._queue.put_nowait(tick)
                 except asyncio.QueueFull:

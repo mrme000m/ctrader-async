@@ -14,6 +14,8 @@ from .protocol import ProtocolHandler
 from .auth import Authenticator
 from .api import TradingAPI, MarketDataAPI, AccountAPI, SymbolCatalog
 from .utils.errors import ConnectionError, AuthenticationError
+from .utils.reconnect import ReconnectManager, ReconnectConfig
+from .utils.metrics import MetricsCollector
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +108,13 @@ class CTraderClient:
         from .utils import EventBus, HookManager
         self.events = EventBus()
         self.hooks = HookManager()
+
+        # Built-in metrics (optional, but attached by default)
+        self.metrics = MetricsCollector()
+
+        self._reconnect_task: asyncio.Task | None = None
+        self._reconnect_manager: ReconnectManager | None = None
+        self._closing: bool = False
 
         # Optional model normalization bridge + cache updater
         self.model_bridge = None
@@ -212,6 +221,33 @@ class CTraderClient:
             # Create protocol handler
             self._protocol = ProtocolHandler(self._transport, config=self.config)
             await self._protocol.start()
+
+            # Attach metrics to hooks + internal protocol events
+            try:
+                self.hooks.register("protocol.post_send_request", self.metrics.on_post_send_request)
+                self.hooks.register("protocol.post_response", self.metrics.on_post_response)
+                if getattr(self._protocol, "events", None) is not None:
+                    self._protocol.events.on("protocol.inbound_dropped", self.metrics.on_inbound_dropped)
+                    self._protocol.events.on("stream.tick_dropped", self.metrics.on_tick_dropped)
+            except Exception:
+                pass
+
+            # Setup reconnect manager
+            self._reconnect_manager = ReconnectManager(
+                ReconnectConfig(
+                    enabled=bool(getattr(self.config, "reconnect_enabled", True)),
+                    max_attempts=int(getattr(self.config, "reconnect_max_attempts", 10)),
+                    base_delay=float(getattr(self.config, "reconnect_base_delay", 1.0)),
+                    max_delay=float(getattr(self.config, "reconnect_max_delay", 300.0)),
+                )
+            )
+
+            # If protocol reports connection loss, attempt reconnect
+            try:
+                if getattr(self._protocol, "events", None) is not None:
+                    self._protocol.events.on("protocol.connection_lost", self._on_protocol_connection_lost)
+            except Exception:
+                pass
 
             # Default event emission for raw envelopes (bot/agent friendly)
             self._protocol.dispatcher.register_default(
@@ -325,13 +361,62 @@ class CTraderClient:
         self._protocol.dispatcher.register(ProtoOASpotEvent().payloadType, on_spot)
         self._protocol.dispatcher.register(ProtoOAExecutionEvent().payloadType, on_execution)
 
+    async def _on_protocol_connection_lost(self, evt):
+        # Avoid reconnect loops during explicit shutdown
+        if self._closing:
+            return
+        if not self.config.reconnect_enabled:
+            return
+        if self._reconnect_task and not self._reconnect_task.done():
+            return
+        self._reconnect_task = asyncio.create_task(self._reconnect_loop())
+
+    async def _reconnect_loop(self) -> None:
+        """Reconnect with backoff and perform refresh-only state recovery.
+
+        Correctness rules:
+        - never retry/resent non-idempotent trading requests
+        - only rebuild connection + refresh server-authoritative state
+        """
+        if self._reconnect_manager is None:
+            return
+
+        async def _attempt():
+            await self.events.emit("client.reconnect.attempt", {})
+            await self.metrics.on_reconnect_attempt({})
+
+            # fully rebuild client connection
+            try:
+                await self.disconnect()
+            except Exception:
+                pass
+            await self.connect()
+
+            # refresh-only recovery
+            try:
+                if self.account:
+                    await self.account.get_info(refresh=True)
+                if self.trading:
+                    await self.trading.refresh_positions()
+                    await self.trading.refresh_orders()
+            except Exception:
+                # best-effort
+                pass
+
+            await self.events.emit("client.reconnect.success", {})
+            await self.metrics.on_reconnect_success({})
+
+        await self._reconnect_manager.connect_with_retry(_attempt)
+
     async def disconnect(self):
         """Disconnect from cTrader server.
         
         This gracefully closes all connections and cleans up resources.
         """
         logger.info("Disconnecting...")
-        
+
+        self._closing = True
+
         self._authenticated = False
         self._connected = False
         
@@ -356,6 +441,7 @@ class CTraderClient:
         self.symbols = None
         
         logger.info("Disconnected")
+        self._closing = False
     
     @property
     def is_connected(self) -> bool:

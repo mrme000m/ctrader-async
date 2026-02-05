@@ -36,6 +36,7 @@ from .typed_events import (
     PositionUpdateEvent,
     DealEvent,
 )
+from .metrics import MetricsCollector, MetricsSnapshot
 
 __all__ = [
     # Errors
@@ -84,4 +85,9 @@ __all__ = [
     "OrderUpdateEvent",
     "PositionUpdateEvent",
     "DealEvent",
+
+    # Metrics
+    "MetricsCollector",
+    "MetricsSnapshot",
 ]
+

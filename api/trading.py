@@ -9,7 +9,7 @@ import uuid
 import logging
 from typing import Optional, TYPE_CHECKING
 
-from ..models import Position, Order
+from ..models import Position, Order, Deal
 from ..enums import TradeSide, OrderType, TimeInForce, OrderTriggerMethod
 from ..utils.errors import TradingError, MarketClosedError, OrderError
 from ..utils.rate_limiter import TokenBucketRateLimiter
@@ -229,6 +229,15 @@ class TradingAPI:
         expiration_timestamp: Optional[int] = None,
         comment: Optional[str] = None,
         label: Optional[str] = None,
+        # Advanced protection/behavior (protobuf-supported)
+        slippage_in_points: int | None = None,
+        relative_stop_loss: int | None = None,
+        relative_take_profit: int | None = None,
+        guaranteed_stop_loss: bool | None = None,
+        trailing_stop_loss: bool | None = None,
+        stop_trigger_method: OrderTriggerMethod | None = None,
+        # Hedging/netting support: target an existing position (account/broker dependent)
+        position_id: int | None = None,
     ) -> Order:
         """Place a limit order.
         
@@ -286,6 +295,24 @@ class TradingAPI:
                 req.comment = comment
             if label:
                 req.label = label
+
+            # Advanced fields (protobuf-supported)
+            if slippage_in_points is not None:
+                req.slippageInPoints = int(slippage_in_points)
+            if relative_stop_loss is not None:
+                req.relativeStopLoss = int(relative_stop_loss)
+            if relative_take_profit is not None:
+                req.relativeTakeProfit = int(relative_take_profit)
+            if guaranteed_stop_loss is not None:
+                req.guaranteedStopLoss = bool(guaranteed_stop_loss)
+            if trailing_stop_loss is not None:
+                req.trailingStopLoss = bool(trailing_stop_loss)
+            if stop_trigger_method is not None:
+                from ..messages.OpenApiModelMessages_pb2 import ProtoOAOrderTriggerMethod
+
+                req.stopTriggerMethod = stop_trigger_method.to_proto(ProtoOAOrderTriggerMethod)
+            if position_id is not None:
+                req.positionId = int(position_id)
             
             # Generate client order ID for tracking
             client_order_id = str(uuid.uuid4())
@@ -355,6 +382,14 @@ class TradingAPI:
         expiration_timestamp: Optional[int] = None,
         comment: Optional[str] = None,
         label: Optional[str] = None,
+        # Advanced protection/behavior (protobuf-supported)
+        slippage_in_points: int | None = None,
+        relative_stop_loss: int | None = None,
+        relative_take_profit: int | None = None,
+        guaranteed_stop_loss: bool | None = None,
+        trailing_stop_loss: bool | None = None,
+        stop_trigger_method: OrderTriggerMethod | None = None,
+        position_id: int | None = None,
     ) -> Order:
         """Place a stop order.
         
@@ -414,6 +449,24 @@ class TradingAPI:
                 req.comment = comment
             if label:
                 req.label = label
+
+            # Advanced fields (protobuf-supported)
+            if slippage_in_points is not None:
+                req.slippageInPoints = int(slippage_in_points)
+            if relative_stop_loss is not None:
+                req.relativeStopLoss = int(relative_stop_loss)
+            if relative_take_profit is not None:
+                req.relativeTakeProfit = int(relative_take_profit)
+            if guaranteed_stop_loss is not None:
+                req.guaranteedStopLoss = bool(guaranteed_stop_loss)
+            if trailing_stop_loss is not None:
+                req.trailingStopLoss = bool(trailing_stop_loss)
+            if stop_trigger_method is not None:
+                from ..messages.OpenApiModelMessages_pb2 import ProtoOAOrderTriggerMethod
+
+                req.stopTriggerMethod = stop_trigger_method.to_proto(ProtoOAOrderTriggerMethod)
+            if position_id is not None:
+                req.positionId = int(position_id)
             
             # Generate client order ID for tracking
             client_order_id = str(uuid.uuid4())
@@ -484,6 +537,14 @@ class TradingAPI:
         expiration_timestamp: Optional[int] = None,
         comment: Optional[str] = None,
         label: Optional[str] = None,
+        # Advanced protection/behavior (protobuf-supported)
+        slippage_in_points: int | None = None,
+        relative_stop_loss: int | None = None,
+        relative_take_profit: int | None = None,
+        guaranteed_stop_loss: bool | None = None,
+        trailing_stop_loss: bool | None = None,
+        stop_trigger_method: OrderTriggerMethod | None = None,
+        position_id: int | None = None,
     ) -> Order:
         """Place a stop-limit order.
         
@@ -545,6 +606,24 @@ class TradingAPI:
                 req.comment = comment
             if label:
                 req.label = label
+
+            # Advanced fields (protobuf-supported)
+            if slippage_in_points is not None:
+                req.slippageInPoints = int(slippage_in_points)
+            if relative_stop_loss is not None:
+                req.relativeStopLoss = int(relative_stop_loss)
+            if relative_take_profit is not None:
+                req.relativeTakeProfit = int(relative_take_profit)
+            if guaranteed_stop_loss is not None:
+                req.guaranteedStopLoss = bool(guaranteed_stop_loss)
+            if trailing_stop_loss is not None:
+                req.trailingStopLoss = bool(trailing_stop_loss)
+            if stop_trigger_method is not None:
+                from ..messages.OpenApiModelMessages_pb2 import ProtoOAOrderTriggerMethod
+
+                req.stopTriggerMethod = stop_trigger_method.to_proto(ProtoOAOrderTriggerMethod)
+            if position_id is not None:
+                req.positionId = int(position_id)
             
             # Generate client order ID for tracking
             client_order_id = str(uuid.uuid4())
@@ -685,6 +764,9 @@ class TradingAPI:
         *,
         stop_loss: Optional[float] = None,
         take_profit: Optional[float] = None,
+        guaranteed_stop_loss: bool | None = None,
+        trailing_stop_loss: bool | None = None,
+        stop_loss_trigger_method: OrderTriggerMethod | None = None,
     ):
         """Modify position SL/TP.
         
@@ -709,6 +791,14 @@ class TradingAPI:
                 req.stopLoss = float(stop_loss)
             if take_profit is not None:
                 req.takeProfit = float(take_profit)
+            if guaranteed_stop_loss is not None:
+                req.guaranteedStopLoss = bool(guaranteed_stop_loss)
+            if trailing_stop_loss is not None:
+                req.trailingStopLoss = bool(trailing_stop_loss)
+            if stop_loss_trigger_method is not None:
+                from ..messages.OpenApiModelMessages_pb2 import ProtoOAOrderTriggerMethod
+
+                req.stopLossTriggerMethod = stop_loss_trigger_method.to_proto(ProtoOAOrderTriggerMethod)
             
             response = await self.protocol.send_request(
                 req,
@@ -898,6 +988,86 @@ class TradingAPI:
         
         async with self._orders_lock:
             return self._orders.copy()
+
+    async def iter_deals_history(
+        self,
+        *,
+        from_timestamp: int,
+        to_timestamp: int,
+        max_rows: int = 500,
+    ):
+        """Iterate executed deals in a time window.
+
+        This uses `ProtoOADealListReq` / `ProtoOADealListRes` and paginates while `hasMore` is true.
+
+        Args:
+            from_timestamp: start time in milliseconds (inclusive)
+            to_timestamp: end time in milliseconds (inclusive)
+            max_rows: page size (server may cap)
+
+        Yields:
+            `models.Deal` objects
+        """
+        await self._rate_limiter.acquire()
+
+        from ..messages.OpenApiMessages_pb2 import ProtoOADealListReq
+
+        # cTrader paging model: request a window; response returns `deal[]` and `hasMore`.
+        # For safety, when hasMore is true we advance the window start based on the last deal timestamp.
+        cursor_from = int(from_timestamp)
+
+        while True:
+            req = ProtoOADealListReq()
+            req.ctidTraderAccountId = self.config.account_id
+            req.fromTimestamp = int(cursor_from)
+            req.toTimestamp = int(to_timestamp)
+            if max_rows:
+                req.maxRows = int(max_rows)
+
+            response = await self.protocol.send_request(
+                req,
+                timeout=self.config.request_timeout,
+                request_type="DealList",
+            )
+
+            deals_pb = list(getattr(response, "deal", []) or [])
+            for d in deals_pb:
+                yield await self._parse_deal(d)
+
+            has_more = bool(getattr(response, "hasMore", False))
+            if not has_more or not deals_pb:
+                break
+
+            # Advance cursor conservatively.
+            last = deals_pb[-1]
+            last_ts = getattr(last, "executionTimestamp", None)
+            if last_ts is None:
+                last_ts = getattr(last, "createTimestamp", None)
+            if isinstance(last_ts, (int, float)):
+                cursor_from = int(last_ts) + 1
+            else:
+                # If timestamps are missing, avoid infinite loop
+                break
+
+    async def get_deals_history(
+        self,
+        *,
+        from_timestamp: int,
+        to_timestamp: int,
+        max_rows: int = 500,
+    ) -> list[Deal]:
+        """Get executed deals in a time window.
+
+        Convenience wrapper over `iter_deals_history`.
+        """
+        deals: list[Deal] = []
+        async for d in self.iter_deals_history(
+            from_timestamp=from_timestamp,
+            to_timestamp=to_timestamp,
+            max_rows=max_rows,
+        ):
+            deals.append(d)
+        return deals
     
     async def refresh_positions(self):
         """Refresh positions from server."""
@@ -1072,6 +1242,53 @@ class TradingAPI:
             last_update_timestamp=(int(getattr(pos_data, 'utcLastUpdateTimestamp', 0)) or None),
         )
     
+    async def _parse_deal(self, deal_data: any) -> Deal:
+        """Parse a deal from protobuf data into `models.Deal`."""
+        symbol_id = int(getattr(deal_data, "symbolId", 0) or 0) or None
+        symbol_name = None
+        symbol_info = None
+        if symbol_id:
+            try:
+                symbol_name = await self.symbols.get_symbol_name(symbol_id)
+                if symbol_name:
+                    symbol_info = await self.symbols.get_symbol(symbol_name)
+            except Exception:
+                symbol_name = None
+                symbol_info = None
+
+        raw_vol = getattr(deal_data, "volume", None)
+        lots = None
+        if isinstance(raw_vol, (int, float)) and symbol_info is not None:
+            try:
+                lots = float(symbol_info.protocol_volume_to_lots(int(raw_vol)))
+            except Exception:
+                lots = None
+        elif isinstance(raw_vol, (int, float)):
+            # Fallback heuristic used elsewhere in this repo: proto volume ~ cents => lots ~ volume/100.
+            lots = float(raw_vol) / 100.0
+
+        ts = getattr(deal_data, "executionTimestamp", None)
+        if ts is None:
+            ts = getattr(deal_data, "createTimestamp", None)
+
+        return Deal(
+            deal_id=int(getattr(deal_data, "dealId", 0) or 0),
+            order_id=(int(getattr(deal_data, "orderId", 0) or 0) or None),
+            position_id=(int(getattr(deal_data, "positionId", 0) or 0) or None),
+            symbol_id=symbol_id,
+            symbol_name=(str(symbol_name) if symbol_name else None),
+            side=str(getattr(deal_data, "tradeSide", "")) or None,
+            volume=lots,
+            execution_price=(
+                float(getattr(deal_data, "executionPrice", 0.0) or 0.0)
+                if getattr(deal_data, "executionPrice", None) is not None
+                else None
+            ),
+            commission=float(getattr(deal_data, "commission", 0.0) or 0.0),
+            swap=float(getattr(deal_data, "swap", 0.0) or 0.0),
+            timestamp=(int(ts) if isinstance(ts, (int, float)) else None),
+        )
+
     def _parse_order(self, order_data: any, symbol_info: Optional[any]) -> Order:
         """Parse order from protobuf data."""
         from ..enums import TradeSide

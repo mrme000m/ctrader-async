@@ -247,6 +247,13 @@ class ProtocolHandler:
                                 pass
                         except asyncio.QueueEmpty:
                             pass
+
+                        # metrics/event hook
+                        try:
+                            await self.events.emit("protocol.inbound_dropped", {"reason": "queue_full"})
+                        except Exception:
+                            pass
+
                         try:
                             self._inbound_queue.put_nowait(message_bytes)
                         except asyncio.QueueFull:
@@ -261,6 +268,11 @@ class ProtocolHandler:
         except Exception as e:
             logger.error(f"Receive loop error: {e}", exc_info=True)
             if not self._stopped:
+                # Notify observers (client can use this to trigger reconnect)
+                try:
+                    await self.events.emit("protocol.connection_lost", {"error": e})
+                except Exception:
+                    pass
                 raise
     
     async def _worker_loop(self, worker_id: int):

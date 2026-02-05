@@ -87,6 +87,8 @@ from .utils import (
     NormalizedDeal,
     NormalizedExecutionError,
     TradingStateCacheUpdater,
+    MetricsCollector,
+    MetricsSnapshot,
 )
 
 __all__ = [
@@ -147,4 +149,6 @@ __all__ = [
     "NormalizedDeal",
     "NormalizedExecutionError",
     "TradingStateCacheUpdater",
+    "MetricsCollector",
+    "MetricsSnapshot",
 ]

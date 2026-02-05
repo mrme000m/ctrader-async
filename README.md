@@ -252,6 +252,36 @@ You can observe them via:
 - debug logs in `ProtocolHandler.send_request()`
 - hooks (below)
 
+### Built-in metrics (`client.metrics`)
+
+The client exposes a lightweight metrics collector at `client.metrics` (see `utils.metrics`). It tracks:
+- request count + bytes sent
+- response count
+- latency min/max/sum/count (from hook timing)
+- inbound protocol drops (when `drop_inbound_when_full=True`)
+- tick drops (when tick queues are full)
+- reconnect attempts/successes
+
+```python
+snap = client.metrics.snapshot()
+print(snap.requests_sent, snap.latency_count, snap.tick_dropped)
+```
+
+### Auto-reconnect + state recovery
+
+If `ClientConfig.reconnect_enabled=True`, the client will attempt to reconnect on transport receive errors.
+Recovery is **refresh-only** (safe by default):
+- reconnect + re-auth
+- reload symbols
+- refresh account info
+- `Reconcile` to refresh positions + orders
+
+Events emitted on `client.events`:
+- `client.reconnect.attempt`
+- `client.reconnect.success`
+
+This implementation intentionally does **not** resend non-idempotent trading requests.
+
 ### Hook points (metrics, tracing, risk gates)
 
 The client owns a `HookManager` at `client.hooks`. Internally, `ProtocolHandler.send_request()` can call these named hooks:
@@ -441,6 +471,7 @@ See the `examples/` directory for complete working examples:
 - `multi_symbol_ticks.py` - Real-time multi-symbol streaming (coalescing latest)
 - `historical_data.py` - Fetching historical candles
 - `event_driven_bot.py` - Event-driven bot skeleton using `client.events`
+- `advanced_protection_orders.py` - Advanced order protection fields (trailing/GSL/relative SL/TP)
 
 ## Requirements
 

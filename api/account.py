@@ -65,6 +65,16 @@ class AccountAPI:
                 money_digits = getattr(trader, 'moneyDigits', 2)
                 divisor = 10 ** money_digits
                 
+                # Account type (HEDGED / NETTED / SPREAD_BETTING) if available
+                account_type = None
+                try:
+                    from ..messages.OpenApiModelMessages_pb2 import ProtoOAAccountType
+
+                    if hasattr(trader, "accountType"):
+                        account_type = ProtoOAAccountType.Name(int(getattr(trader, "accountType")))
+                except Exception:
+                    account_type = None
+
                 self._cached_info = AccountInfo(
                     account_id=self.config.account_id,
                     balance=trader.balance / divisor,
@@ -72,6 +82,7 @@ class AccountAPI:
                     margin=0.0,
                     free_margin=trader.balance / divisor,
                     money_digits=money_digits,
+                    account_type=account_type,
                 )
                 
                 return self._cached_info
