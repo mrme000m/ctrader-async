@@ -120,6 +120,10 @@ class ProtocolFraming:
     @staticmethod
     def extract_payload(proto_msg: Any) -> Message:
         """Extract the inner payload from a ProtoMessage.
+
+        This method caches the extracted payload on the envelope object to avoid
+        repeated protobuf parsing when multiple handlers access the same message.
+        
         
         Args:
             proto_msg: ProtoMessage envelope
@@ -134,8 +138,18 @@ class ProtocolFraming:
             ...     print(f"Balance: {inner_msg.trader.balance}")
         """
         try:
+            cached = getattr(proto_msg, "_ctrader_cached_payload", None)
+            if cached is not None:
+                return cached
+
             from ..protobuf import Protobuf
-            return Protobuf.extract(proto_msg)
+            payload = Protobuf.extract(proto_msg)
+            try:
+                setattr(proto_msg, "_ctrader_cached_payload", payload)
+            except Exception:
+                # Some protobuf implementations may not allow attribute setting
+                pass
+            return payload
         except Exception as e:
             logger.error(f"Failed to extract payload: {e}")
             raise

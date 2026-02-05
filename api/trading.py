@@ -858,25 +858,55 @@ class TradingAPI:
         except Exception as e:
             logger.error(f"Refresh orders error: {e}", exc_info=True)
     
+    async def close_positions_bulk(self, position_ids: list[int], *, concurrency: int = 5):
+        """Close multiple positions with bounded concurrency."""
+        from ..utils.concurrency import gather_limited
+
+        async def make(pid: int):
+            return await self.close_position(pid)
+
+        factories = [lambda pid=pid: make(pid) for pid in position_ids]
+        return await gather_limited(factories, limit=concurrency)
+
+    async def cancel_orders_bulk(self, order_ids: list[int], *, concurrency: int = 10):
+        """Cancel multiple orders with bounded concurrency."""
+        from ..utils.concurrency import gather_limited
+
+        async def make(oid: int):
+            return await self.cancel_order(oid)
+
+        factories = [lambda oid=oid: make(oid) for oid in order_ids]
+        return await gather_limited(factories, limit=concurrency)
+
+    async def modify_positions_bulk(
+        self,
+        modifications: list[tuple[int, float | None, float | None]],
+        *,
+        concurrency: int = 10,
+    ):
+        """Modify SL/TP for multiple positions.
+
+        Args:
+            modifications: list of (position_id, stop_loss, take_profit)
+            concurrency: parallelism limit
+        """
+        from ..utils.concurrency import gather_limited
+
+        async def make(pid: int, sl: float | None, tp: float | None):
+            return await self.modify_position(pid, stop_loss=sl, take_profit=tp)
+
+        factories = [lambda pid=pid, sl=sl, tp=tp: make(pid, sl, tp) for pid, sl, tp in modifications]
+        return await gather_limited(factories, limit=concurrency)
+
     async def close_all_positions(self):
         """Close all open positions."""
         positions = await self.get_positions()
-        
-        for pos in positions:
-            try:
-                await self.close_position(pos.id)
-            except Exception as e:
-                logger.error(f"Failed to close position {pos.id}: {e}")
-    
+        await self.close_positions_bulk([p.id for p in positions])
+
     async def cancel_all_orders(self):
         """Cancel all pending orders."""
         orders = await self.get_orders()
-        
-        for order in orders:
-            try:
-                await self.cancel_order(order.id)
-            except Exception as e:
-                logger.error(f"Failed to cancel order {order.id}: {e}")
+        await self.cancel_orders_bulk([o.id for o in orders])
     
     def _parse_position(self, pos_data: any, symbol_info: Optional[any]) -> Position:
         """Parse position from protobuf data."""

@@ -134,6 +134,26 @@ class MarketDataAPI:
         """
         from ..streams import TickStream
         return TickStream(self.protocol, self.config, self.symbols, symbol)
+
+    def stream_ticks_multi(self, symbols: list[str] | tuple[str, ...], *, coalesce_latest: bool = True):
+        """Stream real-time tick data for multiple symbols.
+
+        Args:
+            symbols: Iterable of symbol names
+            coalesce_latest: If True, keep only latest tick per symbol when under load
+
+        Returns:
+            Async context manager yielding Tick objects
+        """
+        from ..streams import MultiTickStream
+
+        return MultiTickStream(
+            self.protocol,
+            self.config,
+            self.symbols,
+            symbols,
+            coalesce_latest=coalesce_latest,
+        )
     
     def _parse_candle(self, bar: any, symbol_info: any, timeframe: TimeFrame) -> Candle:
         """Parse candle from protobuf data."""

@@ -98,6 +98,11 @@ class CTraderClient:
         self._transport: Optional[TCPTransport] = None
         self._protocol: Optional[ProtocolHandler] = None
         self._authenticator: Optional[Authenticator] = None
+
+        # Extension points for bots/agents
+        from .utils import EventBus, HookManager
+        self.events = EventBus()
+        self.hooks = HookManager()
         
         # High-level APIs (initialized after connection)
         self.trading: Optional[TradingAPI] = None
@@ -196,9 +201,14 @@ class CTraderClient:
             logger.info(f"Connected to {host}:{PROTOBUF_PORT}")
             
             # Create protocol handler
-            self._protocol = ProtocolHandler(self._transport)
+            self._protocol = ProtocolHandler(self._transport, config=self.config)
             await self._protocol.start()
-            
+
+            # Default event emission for raw envelopes (bot/agent friendly)
+            self._protocol.dispatcher.register_default(
+                lambda envelope: self.events.emit("protobuf.envelope", envelope)
+            )
+
             logger.info("Protocol handler started")
             
             # Authenticate
@@ -216,13 +226,21 @@ class CTraderClient:
             # Initialize symbol catalog
             self.symbols = SymbolCatalog(self._protocol, self.config)
             await self.symbols.load()
-            
+
             logger.info(f"Loaded {len(self.symbols._symbols_by_name)} symbols")
+
+            # Typed event emission (ticks, execution)
+            await self._setup_typed_event_handlers()
             
             # Initialize high-level APIs
             self.trading = TradingAPI(self._protocol, self.config, self.symbols)
             self.market_data = MarketDataAPI(self._protocol, self.config, self.symbols)
             self.account = AccountAPI(self._protocol, self.config)
+
+            # Provide hook manager to APIs (optional)
+            self.trading.hooks = self.hooks
+            self.market_data.hooks = self.hooks
+            self.account.hooks = self.hooks
             
             logger.info("Client ready")
         
@@ -231,6 +249,55 @@ class CTraderClient:
             await self.disconnect()
             raise
     
+    async def _setup_typed_event_handlers(self):
+        """Register internal protobuf handlers that emit typed events."""
+        if not self._protocol or not self.symbols:
+            return
+
+        from .transport import ProtocolFraming
+        from .utils.typed_events import TickEvent, execution_events_from_payload
+        from .messages.OpenApiMessages_pb2 import ProtoOASpotEvent, ProtoOAExecutionEvent
+
+        async def on_spot(envelope):
+            payload = ProtocolFraming.extract_payload(envelope)
+            # Resolve symbol name via catalog if possible
+            symbol_name = None
+            try:
+                info = await self.symbols.get_symbol_by_id(int(payload.symbolId))
+                symbol_name = info.name if info else None
+            except Exception:
+                symbol_name = None
+
+            if symbol_name is None:
+                # fallback: try to resolve from local cache
+                symbol_name = getattr(payload, "symbolName", "") or str(payload.symbolId)
+
+            tick = Tick(
+                symbol_id=int(payload.symbolId),
+                symbol_name=str(symbol_name),
+                bid=getattr(payload, "bid", 0) / 100000.0,
+                ask=getattr(payload, "ask", 0) / 100000.0,
+                timestamp=getattr(payload, "timestamp", 0),
+            )
+            evt = TickEvent(
+                tick=tick,
+                symbol_id=tick.symbol_id,
+                symbol_name=tick.symbol_name,
+                timestamp=tick.timestamp,
+                payload=payload,
+                envelope=envelope,
+            )
+            await self.events.emit("tick", evt)
+
+        async def on_execution(envelope):
+            payload = ProtocolFraming.extract_payload(envelope)
+            for event_name, event_obj in execution_events_from_payload(payload, envelope=envelope):
+                await self.events.emit(event_name, event_obj)
+
+        # Register handlers on dispatcher
+        self._protocol.dispatcher.register(ProtoOASpotEvent().payloadType, on_spot)
+        self._protocol.dispatcher.register(ProtoOAExecutionEvent().payloadType, on_execution)
+
     async def disconnect(self):
         """Disconnect from cTrader server.
         

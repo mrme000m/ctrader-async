@@ -68,6 +68,14 @@ class ClientConfig:
     # Advanced
     heartbeat_interval: float = 30.0  # Send heartbeat every N seconds
     message_max_size: int = 10 * 1024 * 1024  # 10MB max message size
+
+    # Performance / backpressure
+    inbound_queue_size: int = 1000  # max inbound messages buffered before processing
+    inbound_workers: int = 1  # number of message processing tasks
+    drop_inbound_when_full: bool = False  # if True, drop inbound messages instead of blocking
+
+    # Streaming
+    tick_queue_size: int = 1000  # per-stream tick buffer size
     
     def __post_init__(self):
         """Validate configuration after initialization."""
@@ -120,6 +128,10 @@ class ClientConfig:
             rate_limit_historical=get_env("RATE_LIMIT_HISTORICAL", 5, int),
             log_level=get_env("LOG_LEVEL", "INFO"),
             log_messages=get_env("LOG_MESSAGES", False, bool),
+            inbound_queue_size=get_env("INBOUND_QUEUE_SIZE", 1000, int),
+            inbound_workers=get_env("INBOUND_WORKERS", 1, int),
+            drop_inbound_when_full=get_env("DROP_INBOUND_WHEN_FULL", False, bool),
+            tick_queue_size=get_env("TICK_QUEUE_SIZE", 1000, int),
         )
     
     @classmethod

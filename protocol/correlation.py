@@ -7,9 +7,9 @@ from __future__ import annotations
 import asyncio
 import uuid
 import logging
+import time
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
-from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class PendingRequest:
     """
     
     future: asyncio.Future
-    created_at: datetime
+    created_at_monotonic: float
     timeout: float
     request_type: Optional[str] = None
 
@@ -96,7 +96,7 @@ class RequestCorrelator:
         
         logger.debug("Request correlator stopped")
     
-    def create_request(
+    async def create_request(
         self,
         timeout: float = 30.0,
         request_type: Optional[str] = None
@@ -111,21 +111,23 @@ class RequestCorrelator:
             Tuple of (client_msg_id, future)
             
         Example:
-            >>> msg_id, future = correlator.create_request(timeout=30.0)
+            >>> msg_id, future = await correlator.create_request(timeout=30.0)
             >>> await send_request(msg_id)
             >>> response = await asyncio.wait_for(future, timeout=30.0)
         """
         msg_id = str(uuid.uuid4())
-        future = asyncio.Future()
-        
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+
         pending = PendingRequest(
             future=future,
-            created_at=datetime.now(timezone.utc),
+            created_at_monotonic=time.monotonic(),
             timeout=timeout,
-            request_type=request_type
+            request_type=request_type,
         )
-        
-        self._pending[msg_id] = pending
+
+        async with self._lock:
+            self._pending[msg_id] = pending
         
         logger.debug(
             f"Created request: id={msg_id}, type={request_type}, timeout={timeout}s"
@@ -133,18 +135,19 @@ class RequestCorrelator:
         
         return msg_id, future
     
-    def resolve_response(self, msg_id: str, response: Any) -> bool:
+    async def resolve_response(self, msg_id: str, response: Any) -> bool:
         """Resolve a pending request with a response.
-        
+
         Args:
             msg_id: Client message ID
             response: Response payload
-            
+
         Returns:
             True if request was found and resolved, False otherwise
         """
-        pending = self._pending.pop(msg_id, None)
-        
+        async with self._lock:
+            pending = self._pending.pop(msg_id, None)
+
         if pending is None:
             logger.warning(f"No pending request found for msg_id: {msg_id}")
             return False
@@ -155,7 +158,7 @@ class RequestCorrelator:
         
         pending.future.set_result(response)
         
-        elapsed = (datetime.now(timezone.utc) - pending.created_at).total_seconds()
+        elapsed = time.monotonic() - pending.created_at_monotonic
         logger.debug(
             f"Resolved request: id={msg_id}, "
             f"type={pending.request_type}, elapsed={elapsed:.2f}s"
@@ -163,18 +166,19 @@ class RequestCorrelator:
         
         return True
     
-    def reject_request(self, msg_id: str, error: Exception) -> bool:
+    async def reject_request(self, msg_id: str, error: Exception) -> bool:
         """Reject a pending request with an error.
-        
+
         Args:
             msg_id: Client message ID
             error: Exception to set on the future
-            
+
         Returns:
             True if request was found and rejected, False otherwise
         """
-        pending = self._pending.pop(msg_id, None)
-        
+        async with self._lock:
+            pending = self._pending.pop(msg_id, None)
+
         if pending is None:
             logger.warning(f"No pending request found for msg_id: {msg_id}")
             return False
@@ -213,26 +217,27 @@ class RequestCorrelator:
     
     async def _cleanup_timed_out(self):
         """Clean up timed-out requests."""
-        now = datetime.now(timezone.utc)
-        timed_out = []
-        
+        now = time.monotonic()
+        timed_out: list[tuple[str, float, Optional[str]]] = []
+
         async with self._lock:
-            for msg_id, pending in self._pending.items():
-                elapsed = (now - pending.created_at).total_seconds()
-                
+            for msg_id, pending in list(self._pending.items()):
+                elapsed = now - pending.created_at_monotonic
                 if elapsed > pending.timeout:
-                    timed_out.append((msg_id, pending))
+                    # Remove immediately to avoid racing with resolve_response
+                    self._pending.pop(msg_id, None)
+                    timed_out.append((msg_id, pending.timeout, pending.request_type))
         
         # Reject timed-out requests outside the lock
-        for msg_id, pending in timed_out:
+        for msg_id, timeout, request_type in timed_out:
             error = asyncio.TimeoutError(
-                f"Request timed out after {pending.timeout}s (type={pending.request_type})"
+                f"Request timed out after {timeout}s (type={request_type})"
             )
-            self.reject_request(msg_id, error)
-            
+            # best-effort: future might already be resolved/cancelled
+            await self.reject_request(msg_id, error)
+
             logger.warning(
-                f"Request timed out: id={msg_id}, "
-                f"type={pending.request_type}, timeout={pending.timeout}s"
+                f"Request timed out: id={msg_id}, type={request_type}, timeout={timeout}s"
             )
     
     def __repr__(self) -> str:

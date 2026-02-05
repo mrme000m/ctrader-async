@@ -43,6 +43,8 @@ from .models import (
     Tick,
     Candle,
 )
+
+from .streams import MultiTickStream, Fanout
 from .enums import (
     TradeSide,
     OrderType,
@@ -63,6 +65,23 @@ from .utils.errors import (
     OrderError,
 )
 
+# Bot/agent utilities
+from .utils import (
+    EventBus,
+    HookManager,
+    HookContext,
+    retry_async,
+    RetryPolicy,
+    CircuitBreaker,
+    TickEvent,
+    ExecutionEvent,
+    ExecutionErrorEvent,
+    OrderUpdateEvent,
+    PositionUpdateEvent,
+    DealEvent,
+    gather_limited,
+)
+
 __all__ = [
     # Version info
     "__version__",
@@ -80,6 +99,8 @@ __all__ = [
     "AccountInfo",
     "Tick",
     "Candle",
+    "MultiTickStream",
+    "Fanout",
     
     # Enums
     "TradeSide",
@@ -97,4 +118,19 @@ __all__ = [
     "RateLimitError",
     "SymbolNotFoundError",
     "OrderError",
+
+    # Bot/agent utilities
+    "EventBus",
+    "HookManager",
+    "HookContext",
+    "retry_async",
+    "RetryPolicy",
+    "CircuitBreaker",
+    "TickEvent",
+    "ExecutionEvent",
+    "ExecutionErrorEvent",
+    "OrderUpdateEvent",
+    "PositionUpdateEvent",
+    "DealEvent",
+    "gather_limited",
 ]

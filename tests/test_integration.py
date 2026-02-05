@@ -22,6 +22,11 @@ from ctrader_async import (
     TradeSide,
     TimeFrame,
     TimeInForce,
+    TickEvent,
+    ExecutionEvent,
+    OrderUpdateEvent,
+    PositionUpdateEvent,
+    DealEvent,
 )
 from ctrader_async.utils.errors import (
     TradingError,
@@ -135,6 +140,24 @@ class TestMarketOrderTrading:
     @pytest.mark.asyncio
     async def test_place_market_order(self, client):
         """Test placing a market order."""
+        # Observe typed execution lifecycle events
+        exec_seen = {
+            "execution": 0,
+            "execution.order": 0,
+            "execution.position": 0,
+            "execution.deal": 0,
+        }
+
+        def _bump(name: str):
+            def _h(_evt):
+                exec_seen[name] += 1
+            return _h
+
+        client.events.on("execution", _bump("execution"))
+        client.events.on("execution.order", _bump("execution.order"))
+        client.events.on("execution.position", _bump("execution.position"))
+        client.events.on("execution.deal", _bump("execution.deal"))
+
         # Place a small market order
         position = await client.trading.place_market_order(
             symbol="EURUSD",
@@ -142,6 +165,14 @@ class TestMarketOrderTrading:
             volume=0.01,  # Micro lot
             comment="Integration test - market order"
         )
+
+        # Wait briefly for async event delivery
+        for _ in range(50):
+            if exec_seen["execution"] > 0 and (exec_seen["execution.order"] + exec_seen["execution.position"] + exec_seen["execution.deal"]) > 0:
+                break
+            await asyncio.sleep(0.1)
+
+        assert exec_seen["execution"] > 0
         
         assert position is not None
         assert position.id > 0

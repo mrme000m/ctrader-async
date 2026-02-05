@@ -10,10 +10,10 @@ Comprehensive integration tests that connect to real cTrader demo server.
 
 ## Running Tests
 
-Run all tests:
+Run integration tests (opt-in):
 ```bash
 cd ctrader_async
-pytest tests/test_integration.py -v -s
+CTRADER_RUN_INTEGRATION=true pytest tests/test_integration.py -v -s
 ```
 
 Run specific test class:

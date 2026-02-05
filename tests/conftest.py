@@ -29,7 +29,29 @@ _load_dotenv_if_present()
 
 @pytest_asyncio.fixture
 async def client():
-    """Create and connect a client for integration tests."""
+    """Create and connect a client for integration tests.
+
+    Integration tests are opt-in to keep CI/local runs fast and deterministic.
+
+    Enable by setting:
+        CTRADER_RUN_INTEGRATION=true
+
+    And providing required credentials in env (.env supported).
+    """
+    if os.getenv("CTRADER_RUN_INTEGRATION", "").lower() not in ("1", "true", "yes", "on"):
+        pytest.skip("Integration tests disabled (set CTRADER_RUN_INTEGRATION=true to enable)")
+
+    # Basic credential presence check
+    required = [
+        "CTRADER_CLIENT_ID",
+        "CTRADER_CLIENT_SECRET",
+        "CTRADER_ACCESS_TOKEN",
+        "CTRADER_ACCOUNT_ID",
+    ]
+    missing = [k for k in required if not os.getenv(k)]
+    if missing:
+        pytest.skip(f"Missing integration env vars: {', '.join(missing)}")
+
     from ctrader_async import CTraderClient
 
     client = CTraderClient.from_env()

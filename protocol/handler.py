@@ -8,6 +8,8 @@ import asyncio
 import logging
 from typing import Optional, Any
 
+from ..utils.events import EventBus
+
 from ..transport import AsyncTransport, ProtocolFraming
 from .correlation import RequestCorrelator
 from .dispatcher import MessageDispatcher
@@ -42,7 +44,7 @@ class ProtocolHandler:
         >>> await handler.stop()
     """
     
-    def __init__(self, transport: AsyncTransport):
+    def __init__(self, transport: AsyncTransport, *, config: Any | None = None):
         """Initialize protocol handler.
         
         Args:
@@ -51,7 +53,16 @@ class ProtocolHandler:
         self.transport = transport
         self.correlator = RequestCorrelator()
         self.dispatcher = MessageDispatcher()
-        
+        self.events = EventBus()
+
+        # Inbound processing pipeline (backpressure)
+        self._config = config
+        inbound_queue_size = getattr(config, "inbound_queue_size", 1000) if config else 1000
+        self._drop_inbound_when_full = bool(getattr(config, "drop_inbound_when_full", False)) if config else False
+        self._inbound_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=inbound_queue_size)
+        self._worker_count = int(getattr(config, "inbound_workers", 1)) if config else 1
+        self._worker_tasks: list[asyncio.Task] = []
+
         self._receive_task: Optional[asyncio.Task] = None
         self._stopped = False
     
@@ -61,8 +72,13 @@ class ProtocolHandler:
         This starts the correlator and message receive loop.
         """
         await self.correlator.start()
-        
+
         self._stopped = False
+
+        # Start worker tasks first so receive loop can enqueue immediately
+        self._worker_tasks = [
+            asyncio.create_task(self._worker_loop(i)) for i in range(max(1, self._worker_count))
+        ]
         self._receive_task = asyncio.create_task(self._receive_loop())
         
         logger.info("Protocol handler started")
@@ -81,7 +97,18 @@ class ProtocolHandler:
                 await self._receive_task
             except asyncio.CancelledError:
                 pass
-        
+
+        # Cancel workers
+        for task in self._worker_tasks:
+            if not task.done():
+                task.cancel()
+        for task in self._worker_tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        self._worker_tasks = []
+
         # Stop correlator
         await self.correlator.stop()
         
@@ -92,7 +119,8 @@ class ProtocolHandler:
         request: Any,
         *,
         timeout: float = 30.0,
-        request_type: Optional[str] = None
+        request_type: Optional[str] = None,
+        hooks: Any | None = None,
     ) -> Any:
         """Send a request and wait for response.
         
@@ -118,8 +146,17 @@ class ProtocolHandler:
         if not self.transport.is_connected():
             raise CTraderConnectionError("Transport not connected")
         
+        if hooks is not None:
+            # Hook point for request shaping / risk gates
+            await hooks.run(
+                "protocol.pre_send_request",
+                request=request,
+                request_type=request_type or type(request).__name__,
+                timeout=timeout,
+            )
+
         # Create pending request
-        msg_id, future = self.correlator.create_request(
+        msg_id, future = await self.correlator.create_request(
             timeout=timeout,
             request_type=request_type or type(request).__name__
         )
@@ -128,17 +165,34 @@ class ProtocolHandler:
         try:
             data = ProtocolFraming.encode(request, client_msg_id=msg_id)
             await self.transport.send(data)
-            
+
+            if hooks is not None:
+                await hooks.run(
+                    "protocol.post_send_request",
+                    request=request,
+                    request_type=request_type or type(request).__name__,
+                    client_msg_id=msg_id,
+                    bytes_sent=len(data),
+                )
+
             logger.debug(f"Sent request: {type(request).__name__}, id={msg_id}")
         
         except Exception as e:
             # Remove pending request if send fails
-            self.correlator.reject_request(msg_id, e)
+            await self.correlator.reject_request(msg_id, e)
             raise
         
         # Wait for response
         try:
             response = await asyncio.wait_for(future, timeout=timeout)
+            if hooks is not None:
+                await hooks.run(
+                    "protocol.post_response",
+                    request=request,
+                    request_type=request_type or type(request).__name__,
+                    response=response,
+                    client_msg_id=msg_id,
+                )
             return response
         
         except asyncio.TimeoutError:
@@ -177,8 +231,22 @@ class ProtocolHandler:
             async for message_bytes in self.transport.receive():
                 if self._stopped:
                     break
-                
-                await self._handle_message(message_bytes)
+
+                if self._drop_inbound_when_full:
+                    try:
+                        self._inbound_queue.put_nowait(message_bytes)
+                    except asyncio.QueueFull:
+                        # Drop oldest to keep more recent messages
+                        try:
+                            _ = self._inbound_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            pass
+                        try:
+                            self._inbound_queue.put_nowait(message_bytes)
+                        except asyncio.QueueFull:
+                            pass
+                else:
+                    await self._inbound_queue.put(message_bytes)
         
         except asyncio.CancelledError:
             logger.debug("Receive loop cancelled")
@@ -189,6 +257,19 @@ class ProtocolHandler:
             if not self._stopped:
                 raise
     
+    async def _worker_loop(self, worker_id: int):
+        """Process inbound messages from the queue."""
+        logger.debug(f"Inbound worker started: {worker_id}")
+        try:
+            while not self._stopped:
+                message_bytes = await self._inbound_queue.get()
+                try:
+                    await self._handle_message(message_bytes)
+                finally:
+                    self._inbound_queue.task_done()
+        except asyncio.CancelledError:
+            raise
+
     async def _handle_message(self, message_bytes: bytes):
         """Handle a received message.
         
@@ -205,7 +286,7 @@ class ProtocolHandler:
             if msg_id:
                 # Extract payload and resolve the pending request
                 payload = ProtocolFraming.extract_payload(proto_msg)
-                resolved = self.correlator.resolve_response(msg_id, payload)
+                resolved = await self.correlator.resolve_response(msg_id, payload)
                 
                 if resolved:
                     logger.debug(f"Resolved correlated response: id={msg_id}")
@@ -214,6 +295,7 @@ class ProtocolHandler:
             
             # Dispatch non-correlated messages (or unmatched responses) to handlers
             await self.dispatcher.dispatch(proto_msg)
+            await self.events.emit("protobuf.envelope", proto_msg)
         
         except Exception as e:
             logger.error(f"Error handling message: {e}", exc_info=True)

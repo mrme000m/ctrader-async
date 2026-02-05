@@ -48,7 +48,9 @@ class TickStream:
         self.symbols = symbols
         self.symbol = symbol
         
-        self._queue: asyncio.Queue = asyncio.Queue()
+        # Bounded queue for backpressure (prevents unbounded memory growth)
+        maxsize = getattr(config, "tick_queue_size", 1000)
+        self._queue: asyncio.Queue[Tick] = asyncio.Queue(maxsize=maxsize)
         self._subscribed = False
         self._symbol_id: int = 0
     
@@ -152,7 +154,19 @@ class TickStream:
                 timestamp=getattr(payload, 'timestamp', 0),
             )
             
-            await self._queue.put(tick)
+            try:
+                self._queue.put_nowait(tick)
+            except asyncio.QueueFull:
+                # Drop oldest tick to keep latest updates
+                try:
+                    _ = self._queue.get_nowait()
+                    self._queue.task_done()
+                except asyncio.QueueEmpty:
+                    pass
+                try:
+                    self._queue.put_nowait(tick)
+                except asyncio.QueueFull:
+                    pass
         
         except Exception as e:
             logger.error(f"Error processing tick: {e}", exc_info=True)
