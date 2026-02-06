@@ -15,7 +15,7 @@ A modern, pure Python asyncio client library for the cTrader Open API. This libr
 ## Installation
 
 ```bash
-pip install ctct
+pip install ctrader-async
 ```
 
 Or from source:
@@ -24,7 +24,7 @@ pip install -e .
 
 Or directly from git:
 ```bash
-pip install "ctct @ git+https://github.com/mrme000m/ctrader-async.git@<commit>"
+pip install "ctrader-async @ git+https://github.com/mrme000m/ctrader-async.git@<commit>"
 ```
 
 ## Quick Start

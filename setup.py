@@ -11,7 +11,7 @@ readme_file = Path(__file__).parent / "README.md"
 long_description = readme_file.read_text() if readme_file.exists() else ""
 
 setup(
-    name="ctct",
+    name="ctrader-async",
     version="0.1.0",
     author="cTrader Async Contributors",
     author_email="",

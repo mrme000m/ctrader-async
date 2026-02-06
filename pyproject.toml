@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ctct"
+name = "ctrader-async"
 version = "0.1.0"
 description = "Modern async Python client for cTrader Open API"
 readme = "README.md"
