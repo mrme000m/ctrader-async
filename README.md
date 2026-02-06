@@ -274,13 +274,27 @@ Recovery is **refresh-only** (safe by default):
 - reconnect + re-auth
 - reload symbols
 - refresh account info
-- `Reconcile` to refresh positions + orders
+- refresh positions + orders
 
 Events emitted on `client.events`:
 - `client.reconnect.attempt`
 - `client.reconnect.success`
+- `client.reconnect.fatal` (non-retriable failure, e.g. authentication)
 
 This implementation intentionally does **not** resend non-idempotent trading requests.
+
+#### Tick stream resubscription on reconnect
+
+If you created tick streams via `client.market_data.stream_ticks(...)` or `client.market_data.stream_ticks_multi(...)`,
+active streams are automatically **resubscribed** after a successful reconnect.
+
+Important behavior:
+- Stream iterators remain **alive** during the brief unsubscribe/resubscribe window (they do not raise `StopAsyncIteration`).
+- Resubscription is **best-effort**: if one stream fails to resubscribe, others still continue.
+- Only spot tick subscriptions are auto-resubscribed. Execution events already flow without an explicit subscribe in this library.
+
+If you build custom stream-like objects and want the same behavior, implement an async `resubscribe(protocol, symbols)` method
+and register it with the client’s internal registry (see `utils.stream_registry`).
 
 ### Hook points (metrics, tracing, risk gates)
 
@@ -361,6 +375,9 @@ CTRADER_CLIENT_SECRET=your_client_secret
 CTRADER_ACCESS_TOKEN=your_access_token
 CTRADER_ACCOUNT_ID=12345
 CTRADER_HOST_TYPE=demo  # or live
+
+# Extra connection diagnostics (verbose connect/reconnect logs)
+CTRADER_CONNECTION_DEBUG=1
 ```
 
 ### Configuration File
@@ -472,6 +489,7 @@ See the `examples/` directory for complete working examples:
 - `historical_data.py` - Fetching historical candles
 - `event_driven_bot.py` - Event-driven bot skeleton using `client.events`
 - `advanced_protection_orders.py` - Advanced order protection fields (trailing/GSL/relative SL/TP)
+- `reconnect_stream_recovery.py` - Simulated disconnect/reconnect with continued tick stream consumption
 
 ## Requirements
 

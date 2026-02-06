@@ -6,8 +6,13 @@ from __future__ import annotations
 
 import asyncio
 import random
+import logging
 from typing import Optional, Callable, Awaitable
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
+
+from .debug import connection_debug_enabled
 
 
 @dataclass
@@ -107,6 +112,7 @@ class ReconnectManager:
         *,
         on_attempt: Optional[Callable[[int], Awaitable[None]]] = None,
         on_failure: Optional[Callable[[int, Exception], Awaitable[None]]] = None,
+        should_retry: Optional[Callable[[Exception], bool]] = None,
     ) -> bool:
         """Attempt connection with automatic retries.
         
@@ -135,6 +141,11 @@ class ReconnectManager:
             # Call attempt callback
             if on_attempt:
                 await on_attempt(self._attempts)
+
+            if connection_debug_enabled():
+                logger.info(f"Reconnect attempt {self._attempts + 1} (max={self.config.max_attempts or 'inf'})")
+            else:
+                logger.debug(f"Reconnect attempt {self._attempts + 1} (max={self.config.max_attempts or 'inf'})")
             
             # Attempt connection
             try:
@@ -145,7 +156,18 @@ class ReconnectManager:
                 return True
             
             except Exception as e:
+                # If caller provided a retry classifier and it says "don't retry",
+                # propagate immediately.
+                if should_retry is not None and not should_retry(e):
+                    logger.error(f"Reconnect failure is non-retriable: {type(e).__name__}: {e}")
+                    self._reconnecting = False
+                    raise
+
                 self._attempts += 1
+                if connection_debug_enabled():
+                    logger.warning(f"Reconnect attempt {self._attempts} failed: {type(e).__name__}: {e}")
+                else:
+                    logger.debug(f"Reconnect attempt {self._attempts} failed: {type(e).__name__}: {e}")
                 
                 # Call failure callback
                 if on_failure:
@@ -158,6 +180,10 @@ class ReconnectManager:
                 
                 # Calculate and wait for backoff delay
                 delay = self.calculate_delay(self._attempts - 1)
+                if connection_debug_enabled():
+                    logger.info(f"Retrying reconnect in {delay:.2f}s")
+                else:
+                    logger.debug(f"Retrying reconnect in {delay:.2f}s")
                 await asyncio.sleep(delay)
     
     async def start_reconnect_loop(

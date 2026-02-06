@@ -34,7 +34,9 @@ class MarketDataAPI:
         self,
         protocol: ProtocolHandler,
         config: ClientConfig,
-        symbols: SymbolCatalog
+        symbols: SymbolCatalog,
+        *,
+        client: object | None = None,
     ):
         """Initialize market data API.
         
@@ -46,6 +48,7 @@ class MarketDataAPI:
         self.protocol = protocol
         self.config = config
         self.symbols = symbols
+        self._client = client
     
     async def get_candles(
         self,
@@ -133,7 +136,11 @@ class MarketDataAPI:
             ...         print(f"Tick: {tick.bid}/{tick.ask}")
         """
         from ..streams import TickStream
-        return TickStream(self.protocol, self.config, self.symbols, symbol)
+        s = TickStream(self.protocol, self.config, self.symbols, symbol)
+        # Attach client for reconnect recovery (best-effort)
+        if self._client is not None:
+            setattr(s, "_client", self._client)
+        return s
 
     def stream_ticks_multi(self, symbols: list[str] | tuple[str, ...], *, coalesce_latest: bool = True):
         """Stream real-time tick data for multiple symbols.
@@ -147,13 +154,16 @@ class MarketDataAPI:
         """
         from ..streams import MultiTickStream
 
-        return MultiTickStream(
+        s = MultiTickStream(
             self.protocol,
             self.config,
             self.symbols,
             symbols,
             coalesce_latest=coalesce_latest,
         )
+        if self._client is not None:
+            setattr(s, "_client", self._client)
+        return s
     
     def _parse_candle(self, bar: any, symbol_info: any, timeframe: TimeFrame) -> Candle:
         """Parse candle from protobuf data."""

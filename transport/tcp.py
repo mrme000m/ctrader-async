@@ -13,6 +13,8 @@ from ..utils.errors import ConnectionError as CTraderConnectionError
 
 logger = logging.getLogger(__name__)
 
+from ..utils.debug import connection_debug_enabled
+
 
 class TCPTransport(AsyncTransport):
     """Pure asyncio TCP transport for cTrader protocol.
@@ -60,7 +62,10 @@ class TCPTransport(AsyncTransport):
             await self.close()
         
         try:
-            logger.info(f"Connecting to {host}:{port}...")
+            if connection_debug_enabled():
+                logger.info(f"Connecting to {host}:{port} (tls={bool(ssl)})...")
+            else:
+                logger.info(f"Connecting to {host}:{port}...")
             
             # Open TCP connection with optional timeout
             if timeout:
@@ -78,10 +83,13 @@ class TCPTransport(AsyncTransport):
             logger.info(f"Connected to {host}:{port}")
             
         except asyncio.TimeoutError as e:
+            logger.error(f"TCP connect timeout to {host}:{port} after {timeout}s")
             raise asyncio.TimeoutError(f"Connection timeout after {timeout}s") from e
         except OSError as e:
+            logger.error(f"TCP connect OS error to {host}:{port}: {e}")
             raise CTraderConnectionError(f"Failed to connect to {host}:{port}: {e}") from e
         except Exception as e:
+            logger.error(f"TCP connect unexpected error to {host}:{port}: {e}", exc_info=True)
             raise CTraderConnectionError(f"Connection error: {e}") from e
     
     async def send(self, data: bytes) -> None:
@@ -107,12 +115,15 @@ class TCPTransport(AsyncTransport):
             
         except ConnectionResetError as e:
             self._connected = False
+            logger.error("TCP send failed: connection reset by peer")
             raise CTraderConnectionError("Connection reset by peer") from e
         except BrokenPipeError as e:
             self._connected = False
+            logger.error("TCP send failed: broken pipe")
             raise CTraderConnectionError("Broken pipe") from e
         except Exception as e:
             self._connected = False
+            logger.error(f"TCP send failed: {e}")
             raise CTraderConnectionError(f"Send error: {e}") from e
     
     async def receive(self) -> AsyncIterator[bytes]:

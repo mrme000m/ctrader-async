@@ -37,6 +37,8 @@ from .typed_events import (
     DealEvent,
 )
 from .metrics import MetricsCollector, MetricsSnapshot
+from .stream_registry import StreamRegistry
+from .debug import connection_debug_enabled
 
 __all__ = [
     # Errors
@@ -89,5 +91,13 @@ __all__ = [
     # Metrics
     "MetricsCollector",
     "MetricsSnapshot",
+
+    # Stream recovery
+    "StreamRegistry",
+
+    # Debug flags
+    "connection_debug_enabled",
 ]
+
+
 

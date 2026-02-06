@@ -17,6 +17,8 @@ from ..utils.errors import ProtocolError, ConnectionError as CTraderConnectionEr
 
 logger = logging.getLogger(__name__)
 
+from ..utils.debug import connection_debug_enabled
+
 
 class ProtocolHandler:
     """High-level protocol handler for cTrader messages.
@@ -196,7 +198,9 @@ class ProtocolHandler:
             return response
         
         except asyncio.TimeoutError:
-            logger.warning(f"Request timed out: {type(request).__name__}, id={msg_id}")
+            logger.warning(
+                f"Request timed out: {request_type or type(request).__name__}, id={msg_id}, timeout={timeout}s"
+            )
             raise
     
     async def send_message(self, message: Any):
@@ -225,7 +229,10 @@ class ProtocolHandler:
         This loops continuously, receiving messages from the transport
         and either resolving correlated requests or dispatching to handlers.
         """
-        logger.debug("Receive loop started")
+        if connection_debug_enabled():
+            logger.info("Receive loop started")
+        else:
+            logger.debug("Receive loop started")
         
         try:
             async for message_bytes in self.transport.receive():
@@ -262,15 +269,18 @@ class ProtocolHandler:
                     await self._inbound_queue.put(message_bytes)
         
         except asyncio.CancelledError:
-            logger.debug("Receive loop cancelled")
+            if connection_debug_enabled():
+                logger.info("Receive loop cancelled")
+            else:
+                logger.debug("Receive loop cancelled")
             raise
         
         except Exception as e:
-            logger.error(f"Receive loop error: {e}", exc_info=True)
+            logger.error(f"Receive loop error: {type(e).__name__}: {e}", exc_info=True)
             if not self._stopped:
                 # Notify observers (client can use this to trigger reconnect)
                 try:
-                    await self.events.emit("protocol.connection_lost", {"error": e})
+                    await self.events.emit("protocol.connection_lost", {"error": e, "error_type": type(e).__name__})
                 except Exception:
                     pass
                 raise

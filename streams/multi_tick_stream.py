@@ -50,6 +50,7 @@ class MultiTickStream:
 
         maxsize = getattr(config, "tick_queue_size", 1000)
         self._queue: asyncio.Queue[Tick] = asyncio.Queue(maxsize=maxsize)
+        self._active = False
         self._subscribed = False
 
         self._symbol_ids: dict[int, str] = {}
@@ -58,17 +59,31 @@ class MultiTickStream:
         self._flush_event = asyncio.Event()
 
     async def __aenter__(self):
+        self._active = True
         await self._subscribe()
+        client = getattr(self, "_client", None)
+        if client is not None and hasattr(client, "_stream_registry"):
+            try:
+                client._stream_registry.register(self)
+            except Exception:
+                pass
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self._active = False
+        client = getattr(self, "_client", None)
+        if client is not None and hasattr(client, "_stream_registry"):
+            try:
+                client._stream_registry.unregister(self)
+            except Exception:
+                pass
         await self._unsubscribe()
 
     def __aiter__(self):
         return self
 
     async def __anext__(self) -> Tick:
-        if not self._subscribed:
+        if not self._active:
             raise StopAsyncIteration
         return await self._queue.get()
 
@@ -110,6 +125,17 @@ class MultiTickStream:
             self._flush_task = asyncio.create_task(self._flush_loop())
 
         logger.info(f"Subscribed to {len(self._symbol_ids)} symbols ticks")
+
+    async def resubscribe(self, protocol, symbols) -> None:
+        if not self._subscribed:
+            return
+        try:
+            await self._unsubscribe()
+        except Exception:
+            pass
+        self.protocol = protocol
+        self.symbols = symbols
+        await self._subscribe()
 
     async def _unsubscribe(self) -> None:
         if not self._subscribed:

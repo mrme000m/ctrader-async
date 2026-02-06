@@ -51,16 +51,35 @@ class TickStream:
         # Bounded queue for backpressure (prevents unbounded memory growth)
         maxsize = getattr(config, "tick_queue_size", 1000)
         self._queue: asyncio.Queue[Tick] = asyncio.Queue(maxsize=maxsize)
+        # _active controls iterator lifetime (context manager).
+        # _subscribed controls whether we've sent SubscribeSpots.
+        self._active = False
         self._subscribed = False
         self._symbol_id: int = 0
     
     async def __aenter__(self):
         """Enter async context manager."""
+        self._active = True
         await self._subscribe()
+        # Register for reconnect recovery (if constructed via client.market_data)
+        client = getattr(self, "_client", None)
+        if client is not None and hasattr(client, "_stream_registry"):
+            try:
+                client._stream_registry.register(self)
+            except Exception:
+                pass
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Exit async context manager."""
+        self._active = False
+        # Unregister first so reconnect doesn't race with unsubscribe
+        client = getattr(self, "_client", None)
+        if client is not None and hasattr(client, "_stream_registry"):
+            try:
+                client._stream_registry.unregister(self)
+            except Exception:
+                pass
         await self._unsubscribe()
     
     async def _subscribe(self):
@@ -102,6 +121,23 @@ class TickStream:
             logger.error(f"Failed to subscribe to ticks: {e}", exc_info=True)
             raise
     
+    async def resubscribe(self, protocol, symbols) -> None:
+        """Resubscribe after reconnect (best-effort).
+
+        Keeps the same queue; consumers can continue reading.
+        """
+        if not self._subscribed:
+            return
+
+        try:
+            await self._unsubscribe()
+        except Exception:
+            pass
+
+        self.protocol = protocol
+        self.symbols = symbols
+        await self._subscribe()
+
     async def _unsubscribe(self):
         """Unsubscribe from tick updates."""
         if not self._subscribed:
@@ -188,7 +224,9 @@ class TickStream:
     
     async def __anext__(self) -> Tick:
         """Get next tick."""
-        if not self._subscribed:
+        if not self._active:
             raise StopAsyncIteration
-        
+
+        # During reconnect resubscribe, we may be temporarily unsubscribed.
+        # Keep the iterator alive and wait for new ticks.
         return await self._queue.get()
