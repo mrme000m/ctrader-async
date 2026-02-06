@@ -3,6 +3,7 @@ Setup script for ctrader_async package.
 """
 
 from setuptools import setup, find_packages
+
 from pathlib import Path
 
 # Read README
@@ -10,7 +11,7 @@ readme_file = Path(__file__).parent / "README.md"
 long_description = readme_file.read_text() if readme_file.exists() else ""
 
 setup(
-    name="ctrader-async",
+    name="ctct",
     version="0.1.0",
     author="cTrader Async Contributors",
     author_email="",
@@ -18,7 +19,8 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/yourusername/ctrader-async",
-    packages=find_packages(exclude=["tests", "tests.*", "examples", "examples.*"]),
+    packages=find_packages(where="src", exclude=["tests", "tests.*", "examples", "examples.*", "**/__pycache__*", "**/*.pyc"]),
+    package_dir={"": "src"},
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
@@ -34,6 +36,7 @@ setup(
     python_requires=">=3.10",
     install_requires=[
         "protobuf>=4.25.0,<6.0",
+        "typing_extensions>=4.12.2",
     ],
     extras_require={
         "dev": [

@@ -1,4 +1,4 @@
-"""Pytest configuration for ctrader_async integration tests."""
+"""Pytest configuration for ctc integration tests."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ async def client():
     if missing:
         pytest.skip(f"Missing integration env vars: {', '.join(missing)}")
 
-    from ctrader_async import CTraderClient
+    from ctc import CTraderClient
 
     client = CTraderClient.from_env()
 

@@ -3,8 +3,8 @@ from __future__ import annotations
 import types
 import pytest
 
-from ctrader_async.api.trading import TradingAPI
-from ctrader_async.enums import OrderTriggerMethod
+from ctc.api.trading import TradingAPI
+from ctc.enums import OrderTriggerMethod
 
 
 class _FakeProtocol:

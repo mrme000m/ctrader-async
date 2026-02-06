@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from ctrader_async.utils.reconnect import ReconnectManager, ReconnectConfig
-from ctrader_async.utils.errors import AuthenticationError
+from ctc.utils.reconnect import ReconnectManager, ReconnectConfig
+from ctc.utils.errors import AuthenticationError
 
 
 @pytest.mark.asyncio

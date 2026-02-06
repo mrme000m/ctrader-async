@@ -17,7 +17,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from ctrader_async import (
+from ctc import (
     CTraderClient,
     TradeSide,
     TimeFrame,
@@ -28,7 +28,7 @@ from ctrader_async import (
     PositionUpdateEvent,
     DealEvent,
 )
-from ctrader_async.utils.errors import (
+from ctc.utils.errors import (
     TradingError,
     MarketClosedError,
     OrderError,

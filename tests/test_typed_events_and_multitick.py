@@ -5,10 +5,10 @@ import types
 
 import pytest
 
-from ctrader_async.utils import EventBus
-from ctrader_async.utils.typed_events import TickEvent
-from ctrader_async.models import Tick
-from ctrader_async.streams.multi_tick_stream import MultiTickStream
+from ctc.utils import EventBus
+from ctc.utils.typed_events import TickEvent
+from ctc.models import Tick
+from ctc.streams.multi_tick_stream import MultiTickStream
 
 
 class _FakeSymbols:
@@ -72,7 +72,7 @@ async def test_eventbus_tick_event_emission():
 @pytest.mark.asyncio
 async def test_multitickstream_coalesces_latest(monkeypatch):
     # Patch ProtocolFraming.extract_payload used by stream
-    from ctrader_async.transport import ProtocolFraming
+    from ctc.transport import ProtocolFraming
 
     monkeypatch.setattr(ProtocolFraming, "extract_payload", lambda env: env._payload)
 

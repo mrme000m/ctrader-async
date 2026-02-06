@@ -3,8 +3,8 @@ from __future__ import annotations
 import types
 import pytest
 
-from ctrader_async.utils.typed_events import execution_events_from_payload
-from ctrader_async.api.trading import TradingAPI
+from ctc.utils.typed_events import execution_events_from_payload
+from ctc.api.trading import TradingAPI
 
 
 def test_execution_events_from_payload_splits_events():

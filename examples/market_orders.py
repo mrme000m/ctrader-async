@@ -3,7 +3,7 @@ Example: Placing different types of orders.
 """
 
 import asyncio
-from ctrader_async import CTraderClient, TradeSide, TimeInForce
+from ctc import CTraderClient, TradeSide, TimeInForce
 
 
 async def main():
@@ -16,7 +16,7 @@ async def main():
         #
         # import logging
         # logging.basicConfig(level=logging.INFO)
-        # logging.getLogger("ctrader_async").setLevel(logging.DEBUG)
+        # logging.getLogger("ctc").setLevel(logging.DEBUG)
         #
         # Capture per-request timings via hooks:
         #

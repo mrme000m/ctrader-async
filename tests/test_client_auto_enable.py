@@ -3,7 +3,7 @@ from __future__ import annotations
 import types
 import pytest
 
-from ctrader_async.client import CTraderClient
+from ctc.client import CTraderClient
 
 
 @pytest.mark.asyncio
@@ -33,7 +33,7 @@ async def test_client_auto_enables_bridges(monkeypatch):
         def is_connected(self):
             return True
 
-    monkeypatch.setattr("ctrader_async.client.TCPTransport", _FakeTCP)
+    monkeypatch.setattr("ctc.client.TCPTransport", _FakeTCP)
 
     class _FakeProtocol:
         def __init__(self):
@@ -45,7 +45,7 @@ async def test_client_auto_enables_bridges(monkeypatch):
     c._protocol = _FakeProtocol()
 
     # Monkeypatch network/auth/symbol load steps to no-op
-    monkeypatch.setattr("ctrader_async.client.get_host", lambda *_: "localhost")
+    monkeypatch.setattr("ctc.client.get_host", lambda *_: "localhost")
 
     async def _noop(*args, **kwargs):
         return
@@ -58,7 +58,7 @@ async def test_client_auto_enables_bridges(monkeypatch):
         async def authenticate(self, **k):
             return True
 
-    monkeypatch.setattr("ctrader_async.client.Authenticator", _FakeAuth)
+    monkeypatch.setattr("ctc.client.Authenticator", _FakeAuth)
 
     # symbol catalog
     class _FakeSymbols:
@@ -68,7 +68,7 @@ async def test_client_auto_enables_bridges(monkeypatch):
         async def load(self):
             return
 
-    monkeypatch.setattr("ctrader_async.client.SymbolCatalog", _FakeSymbols)
+    monkeypatch.setattr("ctc.client.SymbolCatalog", _FakeSymbols)
 
     # APIs
     class _FakeTrading:
@@ -87,12 +87,12 @@ async def test_client_auto_enables_bridges(monkeypatch):
         def __init__(self, *a, **k):
             pass
 
-    monkeypatch.setattr("ctrader_async.client.TradingAPI", _FakeTrading)
-    monkeypatch.setattr("ctrader_async.client.MarketDataAPI", _FakeMarket)
-    monkeypatch.setattr("ctrader_async.client.AccountAPI", _FakeAccount)
+    monkeypatch.setattr("ctc.client.TradingAPI", _FakeTrading)
+    monkeypatch.setattr("ctc.client.MarketDataAPI", _FakeMarket)
+    monkeypatch.setattr("ctc.client.AccountAPI", _FakeAccount)
 
     # Patch ProtocolHandler construction to reuse existing protocol
-    monkeypatch.setattr("ctrader_async.client.ProtocolHandler", lambda *_a, **_k: c._protocol)
+    monkeypatch.setattr("ctc.client.ProtocolHandler", lambda *_a, **_k: c._protocol)
 
     await c.connect()
 

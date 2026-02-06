@@ -3,7 +3,7 @@ Example: Fetching historical candlestick data.
 """
 
 import asyncio
-from ctrader_async import CTraderClient, TimeFrame
+from ctc import CTraderClient, TimeFrame
 
 
 async def main():

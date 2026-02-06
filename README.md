@@ -15,19 +15,24 @@ A modern, pure Python asyncio client library for the cTrader Open API. This libr
 ## Installation
 
 ```bash
-pip install ctrader-async
+pip install ctct
 ```
 
 Or from source:
 ```bash
 pip install -e .
+
+Or directly from git:
+```bash
+pip install "ctct @ git+https://github.com/mrme000m/ctrader-async.git@<commit>"
 ```
 
 ## Quick Start
 
 ```python
 import asyncio
-from ctrader_async import CTraderClient, TradeSide
+import ctc
+from ctc import CTraderClient, TradeSide
 
 async def main():
     # Initialize client with credentials
@@ -103,7 +108,7 @@ async with client.market_data.stream_ticks("EURUSD") as stream:
 - For idempotent operations (e.g., refetching positions), use `utils.retry_async` with a conservative policy.
 
 ```python
-from ctrader_async.utils import retry_async, RetryPolicy
+from ctc.utils import retry_async, RetryPolicy
 
 policy = RetryPolicy(max_attempts=5, base_delay=0.2, max_delay=3.0)
 
@@ -185,11 +190,11 @@ There are a few layers of events:
 
 - `protobuf.envelope`: raw protobuf envelope (advanced / low-level)
 - `execution.*`: typed execution lifecycle events derived from `ProtoOAExecutionEvent`
-- `model.*`: normalized `ctrader_async.models` dataclasses (optional bridge)
+- `model.*`: normalized `ctc.models` dataclasses (optional bridge)
 
 ```python
 import asyncio
-from ctrader_async import CTraderClient
+from ctc import CTraderClient
 
 async def main():
     async with CTraderClient.from_env(auto_enable_features=True) as client:
@@ -219,7 +224,7 @@ asyncio.run(main())
 To enable the model bridge + state cache updater automatically, construct the client with `auto_enable_features=True` (see `CTraderClient`), or enable them manually:
 
 ```python
-from ctrader_async.utils import ModelEventBridge, TradingStateCacheUpdater
+from ctc.utils import ModelEventBridge, TradingStateCacheUpdater
 
 bridge = ModelEventBridge(client.events, client.symbols, client.trading)
 bridge.enable()
@@ -238,10 +243,10 @@ The library uses Python's standard `logging` module. For troubleshooting, enable
 import logging
 
 logging.basicConfig(level=logging.INFO)
-logging.getLogger("ctrader_async").setLevel(logging.DEBUG)
+logging.getLogger("ctc").setLevel(logging.DEBUG)
 # Or narrow it down:
-# logging.getLogger("ctrader_async.protocol").setLevel(logging.DEBUG)
-# logging.getLogger("ctrader_async.transport").setLevel(logging.DEBUG)
+# logging.getLogger("ctc.protocol").setLevel(logging.DEBUG)
+# logging.getLogger("ctc.transport").setLevel(logging.DEBUG)
 ```
 
 ### Correlation IDs (`clientMsgId`)
@@ -308,7 +313,7 @@ Example: record timings and sizes for every request:
 
 ```python
 import time
-from ctrader_async import CTraderClient
+from ctc import CTraderClient
 
 async def main():
     async with CTraderClient.from_env() as client:
@@ -348,7 +353,7 @@ client.events.on("protobuf.envelope", log_envelope)
 ## Architecture
 
 ```
-ctrader_async/
+ctc/
 ├── transport/          # Low-level TCP/protocol handling
 ├── protocol/           # Message correlation & dispatch
 ├── auth/              # Authentication state machine
@@ -383,7 +388,7 @@ CTRADER_CONNECTION_DEBUG=1
 ### Configuration File
 
 ```python
-from ctrader_async import ClientConfig
+from ctc import ClientConfig
 
 config = ClientConfig.from_file("ctrader_config.json")
 client = CTraderClient.from_config(config)
@@ -392,7 +397,7 @@ client = CTraderClient.from_config(config)
 ## Error Handling
 
 ```python
-from ctrader_async.utils.errors import (
+from ctc.utils.errors import (
     ConnectionError,
     AuthenticationError,
     TradingError,
@@ -476,7 +481,7 @@ pytest tests/
 
 Run with coverage:
 ```bash
-pytest --cov=ctrader_async tests/
+pytest --cov=ctc tests/
 ```
 
 ## Examples
@@ -502,7 +507,7 @@ See the `examples/` directory for complete working examples:
 
 ## Comparison with OpenApiPy
 
-| Feature | OpenApiPy (Twisted) | ctrader_async |
+| Feature | OpenApiPy (Twisted) | ctc |
 |---------|---------------------|---------------|
 | **Async Framework** | Twisted (Deferreds) | Native asyncio |
 | **API Style** | Low-level callbacks | High-level async/await |

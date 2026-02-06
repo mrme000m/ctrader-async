@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import time
 
-from ctrader_async import CTraderClient, TradeSide, OrderTriggerMethod
+from ctc import CTraderClient, TradeSide, OrderTriggerMethod
 
 
 async def main() -> None:

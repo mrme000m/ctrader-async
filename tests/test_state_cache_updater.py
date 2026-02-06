@@ -3,8 +3,8 @@ from __future__ import annotations
 import types
 import pytest
 
-from ctrader_async.utils import EventBus
-from ctrader_async.utils.state_cache import TradingStateCacheUpdater
+from ctc.utils import EventBus
+from ctc.utils.state_cache import TradingStateCacheUpdater
 
 
 @pytest.mark.asyncio

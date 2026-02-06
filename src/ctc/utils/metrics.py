@@ -1,4 +1,4 @@
-"""Lightweight performance metrics for ctrader_async.
+"""Lightweight performance metrics for ctc.
 
 Design goals:
 - dependency-free

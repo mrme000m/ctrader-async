@@ -3,7 +3,7 @@ from __future__ import annotations
 import types
 import pytest
 
-from ctrader_async.api.trading import TradingAPI
+from ctc.api.trading import TradingAPI
 
 
 class _FakeProtocol:
@@ -27,7 +27,7 @@ class _FakeSymbols:
         return info.name if info else None
 
     async def get_symbol(self, name: str):
-        # Provide conversions consistent with ctrader_async.models.Symbol
+        # Provide conversions consistent with ctc.models.Symbol
         return types.SimpleNamespace(
             id=1,
             name=name,

@@ -7,7 +7,7 @@ Notes:
 
 import asyncio
 
-from ctrader_async import CTraderClient
+from ctc import CTraderClient
 
 
 async def main():
@@ -22,7 +22,7 @@ async def main():
         #
         # import logging
         # logging.basicConfig(level=logging.INFO)
-        # logging.getLogger("ctrader_async").setLevel(logging.DEBUG)
+        # logging.getLogger("ctc").setLevel(logging.DEBUG)
         #
         # Capture per-request timings via hooks:
         #

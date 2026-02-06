@@ -7,7 +7,8 @@ A modern, pure Python asyncio client library for the cTrader Open API.
 Basic usage:
 
     >>> import asyncio
-    >>> from ctrader_async import CTraderClient, TradeSide
+    >>> import ctc
+    >>> from ctc import CTraderClient, TradeSide
     >>> 
     >>> async def main():
     ...     async with CTraderClient(
@@ -33,7 +34,7 @@ __version__ = "0.1.0"
 __author__ = "cTrader Async Contributors"
 __license__ = "MIT"
 
-from .client import CTraderClient
+from .client import CTraderClient  # noqa
 from .config import ClientConfig
 from .models import (
     Position,

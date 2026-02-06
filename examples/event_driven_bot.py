@@ -16,8 +16,8 @@ from __future__ import annotations
 import asyncio
 import signal
 
-from ctrader_async import CTraderClient
-from ctrader_async.utils import ModelEventBridge, TradingStateCacheUpdater
+from ctc import CTraderClient
+from ctc.utils import ModelEventBridge, TradingStateCacheUpdater
 
 
 async def main() -> None:

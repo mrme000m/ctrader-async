@@ -3,9 +3,9 @@ from __future__ import annotations
 import types
 import pytest
 
-from ctrader_async.utils import EventBus
-from ctrader_async.utils.model_bridge import ModelEventBridge
-from ctrader_async.utils.typed_events import OrderUpdateEvent, PositionUpdateEvent
+from ctc.utils import EventBus
+from ctc.utils.model_bridge import ModelEventBridge
+from ctc.utils.typed_events import OrderUpdateEvent, PositionUpdateEvent
 
 
 class _FakeSymbols:

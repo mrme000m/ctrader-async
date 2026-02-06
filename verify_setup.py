@@ -17,8 +17,8 @@ import sys
 import os
 from pathlib import Path
 
-# Ensure project root is on sys.path so `import ctrader_async` works
-# whether this script is run from the repo root or from inside `ctrader_async/`.
+# Ensure project root is on sys.path so `import ctc` works
+# whether this script is run from the repo root or from inside `ctc/`.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
@@ -39,7 +39,7 @@ def check_dependencies():
     print("\n📦 Checking dependencies...")
     
     required = {
-        'ctrader_async': 'ctrader-async (local)',
+        'ctc': 'ctrader-async (local)',
         'google.protobuf': 'protobuf',
         'pytest': 'pytest',
         'pytest_asyncio': 'pytest-asyncio',
@@ -104,8 +104,8 @@ def check_imports():
     print("\n📥 Checking package imports...")
     
     try:
-        from ctrader_async import CTraderClient, TradeSide
-        print(f"   ✅ ctrader_async package imports correctly")
+        from ctc import CTraderClient, TradeSide
+        print(f"   ✅ ctc package imports correctly")
         return True
     except ImportError as e:
         print(f"   ❌ Import error: {e}")
@@ -117,17 +117,17 @@ def check_structure():
     
     base_dir = Path(__file__).parent
     required_files = [
-        "client.py",
-        "config.py",
-        "models.py",
-        "enums.py",
-        "api/trading.py",
-        "api/market_data.py",
-        "api/account.py",
-        "api/symbols.py",
-        "transport/tcp.py",
-        "protocol/handler.py",
-        "auth/authenticator.py",
+        "src/ctc/client.py",
+        "src/ctc/config.py",
+        "src/ctc/models.py",
+        "src/ctc/enums.py",
+        "src/ctc/api/trading.py",
+        "src/ctc/api/market_data.py",
+        "src/ctc/api/account.py",
+        "src/ctc/api/symbols.py",
+        "src/ctc/transport/tcp.py",
+        "src/ctc/protocol/handler.py",
+        "src/ctc/auth/authenticator.py",
         "tests/test_integration.py",
     ]
     
@@ -147,7 +147,7 @@ async def test_connection():
     print("\n🔌 Testing connection to cTrader demo server...")
     
     try:
-        from ctrader_async import CTraderClient
+        from ctc import CTraderClient
         
         client = CTraderClient.from_env()
         

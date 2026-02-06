@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from ctrader_async.utils.stream_registry import StreamRegistry
+from ctc.utils.stream_registry import StreamRegistry
 
 
 class _S:

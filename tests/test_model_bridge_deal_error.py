@@ -3,10 +3,10 @@ from __future__ import annotations
 import types
 import pytest
 
-from ctrader_async.utils import EventBus
-from ctrader_async.utils.model_bridge import ModelEventBridge, NormalizedExecutionError
-from ctrader_async.models import Deal
-from ctrader_async.utils.typed_events import DealEvent, ExecutionErrorEvent
+from ctc.utils import EventBus
+from ctc.utils.model_bridge import ModelEventBridge, NormalizedExecutionError
+from ctc.models import Deal
+from ctc.utils.typed_events import DealEvent, ExecutionErrorEvent
 
 
 class _FakeSymbols:

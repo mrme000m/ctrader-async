@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import pytest
 
-from ctrader_async import TickEvent, TradeSide
+from ctc import TickEvent, TradeSide
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 

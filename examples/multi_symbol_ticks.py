@@ -10,7 +10,7 @@ Notes:
 
 import asyncio
 
-from ctrader_async import CTraderClient
+from ctc import CTraderClient
 
 
 async def main() -> None:

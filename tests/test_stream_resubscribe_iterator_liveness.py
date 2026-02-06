@@ -4,8 +4,8 @@ import asyncio
 import types
 import pytest
 
-from ctrader_async.streams.tick_stream import TickStream
-from ctrader_async.streams.multi_tick_stream import MultiTickStream
+from ctc.streams.tick_stream import TickStream
+from ctc.streams.multi_tick_stream import MultiTickStream
 
 
 class _Dummy:

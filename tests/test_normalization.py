@@ -3,8 +3,8 @@ from __future__ import annotations
 import types
 import pytest
 
-from ctrader_async.utils.typed_events import OrderUpdateEvent, PositionUpdateEvent
-from ctrader_async.utils.normalization import normalize_order_update, normalize_position_update
+from ctc.utils.typed_events import OrderUpdateEvent, PositionUpdateEvent
+from ctc.utils.normalization import normalize_order_update, normalize_position_update
 
 
 class _FakeSymbols:
