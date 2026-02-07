@@ -9,7 +9,9 @@ import logging
 from typing import Optional
 
 from .config import ClientConfig
-from .transport import TCPTransport, get_host, PROTOBUF_PORT
+from .transport import TCPTransport, get_host, PROTOBUF_PORT, WEBSOCKET_AVAILABLE
+if WEBSOCKET_AVAILABLE:
+    from .transport import AsyncWebSocketTransport
 from .protocol import ProtocolHandler
 from .auth import Authenticator
 from .api import TradingAPI, MarketDataAPI, AccountAPI, SymbolCatalog, AssetCatalog, RiskAPI, HistoryAPI, SessionAPI
@@ -56,6 +58,7 @@ class CTraderClient:
         account_id: int,
         host_type: str = "demo",
         *,
+        use_websocket: bool = False,
         auto_model_bridge: bool = False,
         auto_cache_updater: bool = False,
         **kwargs
@@ -68,6 +71,7 @@ class CTraderClient:
             access_token: OAuth access token
             account_id: Trading account ID
             host_type: Server type ("demo" or "live")
+            use_websocket: Use WebSocket transport instead of TCP (default: False)
             **kwargs: Additional configuration options
             
         Additional configuration options:
@@ -78,6 +82,8 @@ class CTraderClient:
             - reconnect_max_attempts: Max reconnection attempts (default: 10)
             - rate_limit_trading: Trading rate limit per second (default: 50)
             - rate_limit_historical: Historical data rate limit (default: 5)
+            - websocket_ping_interval: WebSocket ping interval in seconds (default: 20)
+            - websocket_ping_timeout: WebSocket ping timeout in seconds (default: 10)
             
         Example:
             >>> client = CTraderClient(
@@ -90,6 +96,14 @@ class CTraderClient:
             ...     reconnect_max_attempts=5
             ... )
         """
+        # Store transport type preference
+        self._use_websocket = use_websocket
+        if use_websocket and not WEBSOCKET_AVAILABLE:
+            raise ImportError(
+                "WebSocket transport requested but 'websockets' library is not installed. "
+                "Install it with: pip install websockets"
+            )
+        
         # Create configuration
         self.config = ClientConfig(
             client_id=client_id,
@@ -103,8 +117,8 @@ class CTraderClient:
         # Validate configuration
         self.config.validate()
         
-        # Core components
-        self._transport: Optional[TCPTransport] = None
+        # Core components (transport type determined at connect time)
+        self._transport: Optional[TCPTransport | AsyncWebSocketTransport] = None
         self._protocol: Optional[ProtocolHandler] = None
         self._authenticator: Optional[Authenticator] = None
 
@@ -212,12 +226,26 @@ class CTraderClient:
             return
 
         try:
-            logger.info(f"Connecting to cTrader ({self.config.host_type})...")
+            transport_type = "WebSocket" if self._use_websocket else "TCP"
+            logger.info(f"Connecting to cTrader via {transport_type} ({self.config.host_type})...")
             
-            # Create transport
-            self._transport = TCPTransport(
-                message_max_size=self.config.message_max_size
-            )
+            # Create transport based on preference
+            if self._use_websocket:
+                # WebSocket transport
+                ws_ping_interval = kwargs.get('websocket_ping_interval', 20.0)
+                ws_ping_timeout = kwargs.get('websocket_ping_timeout', 10.0)
+                
+                self._transport = AsyncWebSocketTransport(
+                    ping_interval=ws_ping_interval,
+                    ping_timeout=ws_ping_timeout
+                )
+                logger.info(f"Using WebSocket transport (ping_interval={ws_ping_interval}s)")
+            else:
+                # TCP transport (default)
+                self._transport = TCPTransport(
+                    message_max_size=self.config.message_max_size
+                )
+                logger.info("Using TCP transport")
             
             # Connect to server
             host = get_host(self.config.host_type)
@@ -235,7 +263,7 @@ class CTraderClient:
             )
             
             self._connected = True
-            logger.info(f"Connected to {host}:{PROTOBUF_PORT}")
+            logger.info(f"Connected to {host}:{PROTOBUF_PORT} via {transport_type}")
             
             # Create protocol handler
             self._protocol = ProtocolHandler(self._transport, config=self.config)
