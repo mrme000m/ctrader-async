@@ -22,6 +22,81 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _summarize_execution_event(ev: object) -> dict:
+    """Best-effort summary of ProtoOAExecutionEvent.
+
+    We avoid dumping the whole protobuf to keep logs readable.
+    """
+    def _has(name: str) -> bool:
+        try:
+            return hasattr(ev, name) and getattr(ev, name) is not None
+        except Exception:
+            return False
+
+    def _get(name: str):
+        try:
+            return getattr(ev, name)
+        except Exception:
+            return None
+
+    out: dict = {
+        "type": type(ev).__name__,
+        "has_position": _has("position"),
+        "has_order": _has("order"),
+        "has_deal": _has("deal"),
+        "has_reject": _has("reject"),
+    }
+
+    # Common fields (may or may not exist depending on pb2)
+    for k in [
+        "executionType",
+        "orderId",
+        "positionId",
+        "dealId",
+        "errorCode",
+        "description",
+        "reasonCode",
+    ]:
+        v = _get(k)
+        if v not in (None, 0, ""):
+            out[k] = str(v)
+
+    # Nested rejection/error details if present
+    rej = _get("reject")
+    if rej is not None:
+        try:
+            out["reject"] = {
+                "errorCode": str(getattr(rej, "errorCode", "") or ""),
+                "description": str(getattr(rej, "description", "") or ""),
+                "reasonCode": str(getattr(rej, "reasonCode", "") or ""),
+            }
+        except Exception:
+            out["reject"] = "<unreadable>"
+
+    # Nested order/position ids if present
+    try:
+        pos = _get("position")
+        if pos is not None:
+            out["position_fields"] = {
+                "positionId": int(getattr(pos, "positionId", 0) or 0) or None,
+                "price": float(getattr(pos, "price", 0.0) or 0.0) or None,
+            }
+    except Exception:
+        pass
+
+    try:
+        order = _get("order")
+        if order is not None:
+            out["order_fields"] = {
+                "orderId": int(getattr(order, "orderId", 0) or 0) or None,
+                "clientOrderId": str(getattr(order, "clientOrderId", "") or "") or None,
+            }
+    except Exception:
+        pass
+
+    return out
+
+
 class TradingAPI:
     """High-level API for trading operations.
     
@@ -208,6 +283,27 @@ class TradingAPI:
 
                     return position
             
+            # Always log what we got back for market orders when we can't extract a position.
+            if isinstance(response, ProtoOAExecutionEvent):
+                logger.error(
+                    "Market order execution event missing position. summary=%s",
+                    _summarize_execution_event(response),
+                )
+                # Extra: log a protobuf dict if possible (usually small in rejection cases).
+                try:
+                    from google.protobuf.json_format import MessageToDict  # type: ignore
+
+                    d = MessageToDict(response, preserving_proto_field_name=True)
+                    logger.error("Market order execution event raw_dict=%s", d)
+                except Exception:
+                    pass
+            else:
+                logger.warning(
+                    "Market order response was not execution event. type=%s repr=%r",
+                    type(response).__name__,
+                    response,
+                )
+
             raise TradingError("No position in execution response")
         
         except (TradingError, MarketClosedError):

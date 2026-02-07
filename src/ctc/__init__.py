@@ -44,9 +44,14 @@ from .models import (
     AccountInfo,
     Tick,
     Candle,
+    DepthQuote,
+    DepthSnapshot,
+    MarginInfo,
+    PositionPnL,
+    MarginCall,
 )
 
-from .streams import MultiTickStream, Fanout
+from .streams import MultiTickStream, Fanout, DepthStream, CandleStream
 from .enums import (
     TradeSide,
     OrderType,
@@ -110,8 +115,15 @@ __all__ = [
     "AccountInfo",
     "Tick",
     "Candle",
+    "DepthQuote",
+    "DepthSnapshot",
+    "MarginInfo",
+    "PositionPnL",
+    "MarginCall",
     "MultiTickStream",
     "Fanout",
+    "DepthStream",
+    "CandleStream",
     
     # Enums
     "TradeSide",

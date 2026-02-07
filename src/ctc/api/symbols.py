@@ -151,6 +151,89 @@ class SymbolCatalog:
                 if pattern and pattern in symbol.name.upper()
             ]
     
+    async def get_categories(self) -> list[str]:
+        """Get list of all symbol categories.
+        
+        Symbol categories group symbols by type (e.g., "Forex", "Commodities",
+        "Indices", "Crypto", "Stocks").
+        
+        Returns:
+            List of unique category names
+            
+        Example:
+            >>> categories = await client.symbols.get_categories()
+            >>> for category in categories:
+            ...     print(f"Category: {category}")
+        """
+        try:
+            from ..messages.OpenApiMessages_pb2 import (
+                ProtoOASymbolCategoryListReq,
+                ProtoOASymbolCategoryListRes,
+            )
+            
+            # Build request
+            req = ProtoOASymbolCategoryListReq()
+            req.ctidTraderAccountId = self.config.account_id
+            
+            # Send request
+            response = await self.protocol.send_request(
+                req,
+                timeout=self.config.request_timeout,
+                request_type="SymbolCategoryList"
+            )
+            
+            if not isinstance(response, ProtoOASymbolCategoryListRes):
+                raise ValueError(f"Unexpected response type: {type(response)}")
+            
+            # Parse categories
+            categories = []
+            if hasattr(response, 'symbolCategory'):
+                for cat in response.symbolCategory:
+                    if hasattr(cat, 'name'):
+                        categories.append(cat.name)
+            
+            logger.info(f"Retrieved {len(categories)} symbol categories")
+            return categories
+        
+        except Exception as e:
+            logger.error(f"Failed to get symbol categories: {e}", exc_info=True)
+            # Fallback: extract from loaded symbols
+            if self._loaded:
+                async with self._lock:
+                    categories = set()
+                    for symbol in self._symbols_by_name.values():
+                        if symbol.category_name:
+                            categories.add(symbol.category_name)
+                    return sorted(list(categories))
+            return []
+    
+    async def get_symbols_by_category(self, category_name: str) -> list[Symbol]:
+        """Get all symbols in a specific category.
+        
+        Args:
+            category_name: Category name (e.g., "Forex", "Commodities")
+            
+        Returns:
+            List of symbols in the category
+            
+        Example:
+            >>> # Get all Forex symbols
+            >>> forex_symbols = await client.symbols.get_symbols_by_category("Forex")
+            >>> for symbol in forex_symbols:
+            ...     print(f"{symbol.name}: {symbol.description}")
+        """
+        if not self._loaded:
+            await self.load()
+        
+        category_name = category_name.strip()
+        
+        async with self._lock:
+            return [
+                symbol
+                for symbol in self._symbols_by_name.values()
+                if symbol.category_name and symbol.category_name.lower() == category_name.lower()
+            ]
+    
     def _parse_symbol(self, symbol_data: any) -> Symbol:
         """Parse symbol from protobuf data."""
         return Symbol(
@@ -158,9 +241,20 @@ class SymbolCatalog:
             name=getattr(symbol_data, 'symbolName', ''),
             digits=getattr(symbol_data, 'digits', 5),
             enabled=getattr(symbol_data, 'enabled', True),
+            category_name=getattr(symbol_data, 'categoryName', None),
+            base_asset_id=getattr(symbol_data, 'baseAssetId', None),
+            quote_asset_id=getattr(symbol_data, 'quoteAssetId', None),
+            description=getattr(symbol_data, 'description', None),
             pip_position=getattr(symbol_data, 'pipPosition', None),
+            price_tick_size=(getattr(symbol_data, 'priceTickSize', 0) / 100000.0) if getattr(symbol_data, 'priceTickSize', 0) else None,
             lot_size=getattr(symbol_data, 'lotSize', 100000 * 100),
             min_volume=getattr(symbol_data, 'minVolume', None),
             max_volume=getattr(symbol_data, 'maxVolume', None),
             volume_step=getattr(symbol_data, 'volumeStep', None),
+            enable_short_selling=getattr(symbol_data, 'enableShortSelling', None),
+            guaranteed_stop_loss=getattr(symbol_data, 'guaranteedStopLoss', None),
+            swap_long=getattr(symbol_data, 'swapLong', None),
+            swap_short=getattr(symbol_data, 'swapShort', None),
+            leverage=getattr(symbol_data, 'leverage', None),
+            margin_rate=getattr(symbol_data, 'marginRate', None),
         )

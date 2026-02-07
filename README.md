@@ -4,13 +4,31 @@ A modern, pure Python asyncio client library for the cTrader Open API. This libr
 
 ## Features
 
+### Core
 ✅ **Pure Asyncio** - No Twisted dependencies, native Python async/await  
 ✅ **Clean API** - Intuitive, high-level interface for common operations  
 ✅ **Type Safe** - Full type hints for better IDE support and type checking  
-✅ **Event Streaming** - Async iterators for ticks, positions, and orders  
 ✅ **Context Managers** - Automatic connection lifecycle management  
-✅ **Well Tested** - Comprehensive test coverage with mocked transports  
-✅ **Production Ready** - Error handling, reconnection, rate limiting  
+✅ **Well Tested** - Comprehensive test coverage (43+ unit tests)  
+✅ **Production Ready** - Error handling, reconnection, rate limiting
+
+### Market Data
+✅ **Real-time Ticks** - Async iterators for tick streaming (single & multi-symbol)  
+✅ **Order Book Depth** - Level II market data streaming with analytics  
+✅ **Live Candles** - Real-time candlestick updates as they form  
+✅ **Historical Data** - OHLCV candle data retrieval
+
+### Trading & Risk
+✅ **Order Management** - Market, Limit, Stop orders with protection  
+✅ **Position Management** - Open, modify, close positions with bulk operations  
+✅ **Risk Management** - Pre-trade margin calculation and validation  
+✅ **PnL Tracking** - Real-time position PnL monitoring with cost breakdown
+
+### Reporting & Analytics
+✅ **Trade History** - Deal/trade history with flexible time ranges  
+✅ **Performance Analytics** - Automated win rate, profit factor, statistics  
+✅ **Position Lifecycle** - Track all fills and executions per position  
+✅ **Tax Reporting** - Generate tax reporting data and statements  
 
 ## Installation
 
@@ -64,6 +82,90 @@ async def main():
             print(f"{pos.symbol_name}: {pos.volume} lots, PnL: {pos.pnl_net_unrealized}")
 
 asyncio.run(main())
+```
+
+## API Overview
+
+### Market Data Streaming
+
+```python
+from ctc.enums import TimeFrame
+
+# Stream real-time ticks
+async with client.market_data.stream_ticks("EURUSD") as stream:
+    async for tick in stream:
+        print(f"Bid: {tick.bid}, Ask: {tick.ask}")
+
+# Stream order book depth (Level II)
+async with client.market_data.stream_depth("EURUSD", depth=10) as stream:
+    async for snapshot in stream:
+        print(f"Best Bid: {snapshot.best_bid.price}")
+        print(f"Best Ask: {snapshot.best_ask.price}")
+        print(f"Spread: {snapshot.spread}")
+        print(f"Order Book Imbalance: {snapshot.total_bid_volume() - snapshot.total_ask_volume()}")
+
+# Stream live candles
+async with client.market_data.stream_candles("EURUSD", TimeFrame.M5) as stream:
+    async for candle in stream:
+        print(f"O={candle.open} H={candle.high} L={candle.low} C={candle.close}")
+
+# Get historical candles
+candles = await client.market_data.get_candles("EURUSD", TimeFrame.H1, count=100)
+```
+
+### Risk Management
+
+```python
+# Calculate margin before placing order
+margin_info = await client.risk.get_expected_margin("EURUSD", volume=1.0)
+print(f"Required margin: {margin_info.formatted_margin}")
+
+# Validate trade risk
+validation = await client.risk.validate_trade_risk(
+    symbol="EURUSD",
+    volume=1.0,
+    side="BUY",
+    max_risk_percent=2.0
+)
+
+if validation['valid']:
+    # Safe to place order
+    position = await client.trading.place_market_order("EURUSD", "BUY", 1.0)
+else:
+    print("Trade rejected:", validation['warnings'])
+
+# Get position PnL details
+pnl = await client.risk.get_position_pnl(position_id)
+print(f"Gross PnL: {pnl.formatted_gross_pnl}")
+print(f"Net PnL: {pnl.formatted_net_pnl}")
+print(f"Total Costs: {pnl.total_costs}")
+
+# Monitor margin changes
+def on_margin_change(position_id, used_margin, money_digits):
+    print(f"Position {position_id} margin: {used_margin}")
+
+client.risk.subscribe_margin_events(on_margin_change)
+```
+
+### Trade History & Reporting
+
+```python
+# Get recent trade history
+deals = await client.history.get_deals(days=7)
+for deal in deals:
+    print(f"{deal.symbol_name} {deal.side} {deal.volume} @ {deal.execution_price}")
+
+# Track position lifecycle
+position_deals = await client.history.get_deals_by_position(position_id)
+avg_entry = sum(d.execution_price * d.volume for d in position_deals) / sum(d.volume for d in position_deals)
+
+# Get performance summary
+summary = await client.history.get_performance_summary(days=30)
+print(f"Win Rate: {summary['win_rate']:.1f}%")
+print(f"Profit Factor: {summary['profit_factor']:.2f}")
+print(f"Net PnL: {summary['net_pnl']:.2f}")
+print(f"Average Win: {summary['avg_win']:.2f}")
+print(f"Average Loss: {summary['avg_loss']:.2f}")
 ```
 
 ## Production usage patterns & best practices
@@ -487,14 +589,26 @@ pytest --cov=ctc tests/
 ## Examples
 
 See the `examples/` directory for complete working examples:
+
+**Basic Usage:**
 - `basic_usage.py` - Basic connection and account/symbol queries
 - `market_orders.py` - Placing and managing orders/positions
-- `streaming_ticks.py` - Real-time data streaming (single symbol)
-- `multi_symbol_ticks.py` - Real-time multi-symbol streaming (coalescing latest)
-- `historical_data.py` - Fetching historical candles
 - `event_driven_bot.py` - Event-driven bot skeleton using `client.events`
 - `advanced_protection_orders.py` - Advanced order protection fields (trailing/GSL/relative SL/TP)
-- `reconnect_stream_recovery.py` - Simulated disconnect/reconnect with continued tick stream consumption
+
+**Market Data:**
+- `streaming_ticks.py` - Real-time tick data streaming (single symbol)
+- `multi_symbol_ticks.py` - Real-time multi-symbol streaming (coalescing latest)
+- `historical_data.py` - Fetching historical candles
+- `order_book_depth.py` - **NEW!** Level II market data streaming and analysis
+- `live_candle_streaming.py` - **NEW!** Real-time candlestick streaming with patterns
+
+**Risk & Reporting:**
+- `margin_and_risk_management.py` - **NEW!** Margin calculation, risk validation, PnL tracking
+- `trade_history_and_reporting.py` - **NEW!** Deal history, performance analytics, tax reports
+
+**Infrastructure:**
+- `reconnect_stream_recovery.py` - Simulated disconnect/reconnect with continued stream consumption
 
 ## Requirements
 

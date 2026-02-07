@@ -12,11 +12,12 @@ from .config import ClientConfig
 from .transport import TCPTransport, get_host, PROTOBUF_PORT
 from .protocol import ProtocolHandler
 from .auth import Authenticator
-from .api import TradingAPI, MarketDataAPI, AccountAPI, SymbolCatalog
+from .api import TradingAPI, MarketDataAPI, AccountAPI, SymbolCatalog, AssetCatalog, RiskAPI, HistoryAPI, SessionAPI
 from .utils.errors import ConnectionError, AuthenticationError
 from .utils.reconnect import ReconnectManager, ReconnectConfig
 from .utils.metrics import MetricsCollector
 from .utils.stream_registry import StreamRegistry
+from .utils.tick_store import TickStore
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +116,10 @@ class CTraderClient:
         # Built-in metrics (optional, but attached by default)
         self.metrics = MetricsCollector()
 
+        # Best-effort tick cache (used for conversions)
+        self.ticks = TickStore()
+        self.conversion_subscriptions = None
+
         self._reconnect_task: asyncio.Task | None = None
         self._reconnect_manager: ReconnectManager | None = None
         self._closing: bool = False
@@ -134,6 +139,10 @@ class CTraderClient:
         self.market_data: Optional[MarketDataAPI] = None
         self.account: Optional[AccountAPI] = None
         self.symbols: Optional[SymbolCatalog] = None
+        self.assets: Optional[AssetCatalog] = None
+        self.risk: Optional[RiskAPI] = None
+        self.history: Optional[HistoryAPI] = None
+        self.session: Optional[SessionAPI] = None
         
         # State
         self._connected = False
@@ -281,7 +290,10 @@ class CTraderClient:
             self._authenticated = True
             logger.info("Authentication successful")
             
-            # Initialize symbol catalog
+            # Initialize asset + symbol catalogs
+            self.assets = AssetCatalog(self._protocol, self.config)
+            await self.assets.load()
+
             self.symbols = SymbolCatalog(self._protocol, self.config)
             await self.symbols.load()
 
@@ -293,6 +305,13 @@ class CTraderClient:
             # Initialize high-level APIs
             self.trading = TradingAPI(self._protocol, self.config, self.symbols)
             self.market_data = MarketDataAPI(self._protocol, self.config, self.symbols, client=self)
+            self.risk = RiskAPI(self._protocol, self.config, self.symbols, client=self)
+            self.history = HistoryAPI(self._protocol, self.config, self.symbols, client=self)
+            self.session = SessionAPI(self._protocol, self.config, client=self)
+
+            # Optional helper to keep conversion-related tick subscriptions alive
+            from .utils.conversion_subscriptions import ConversionSubscriptionManager
+            self.conversion_subscriptions = ConversionSubscriptionManager(market_data=self.market_data, tick_store=self.ticks)
             self.account = AccountAPI(self._protocol, self.config)
 
             # Provide hook manager to APIs (optional)
@@ -363,6 +382,12 @@ class CTraderClient:
                 payload=payload,
                 envelope=envelope,
             )
+            # Update last tick cache
+            try:
+                await self.ticks.set(tick)
+            except Exception:
+                pass
+
             await self.events.emit("tick", evt)
 
         async def on_execution(envelope):
@@ -490,6 +515,16 @@ class CTraderClient:
         self.market_data = None
         self.account = None
         self.symbols = None
+        self.assets = None
+        self.risk = None
+        self.history = None
+        self.session = None
+        if self.conversion_subscriptions is not None:
+            try:
+                await self.conversion_subscriptions.stop()
+            except Exception:
+                pass
+        self.conversion_subscriptions = None
         
         logger.info("Disconnected")
         self._closing = False

@@ -295,6 +295,194 @@ class Tick:
 
 
 @dataclass
+class DepthQuote:
+    """Order book depth quote (Level II market data).
+    
+    Represents a single price level in the order book with its volume.
+    
+    Attributes:
+        id: Quote identifier
+        price: Price level
+        volume: Volume available at this price (in lots)
+        side: Quote side ("BUY" or "ASK")
+    """
+    
+    id: int
+    price: float
+    volume: float
+    side: str  # "BUY" or "ASK"
+
+
+@dataclass
+class DepthSnapshot:
+    """Order book depth snapshot (Level II market data).
+    
+    Represents the current state of the order book for a symbol.
+    
+    Attributes:
+        symbol_id: Symbol identifier
+        symbol_name: Symbol name
+        bids: List of bid quotes (sorted by price descending)
+        asks: List of ask quotes (sorted by price ascending)
+        timestamp: Snapshot timestamp (milliseconds)
+    """
+    
+    symbol_id: int
+    symbol_name: str
+    bids: list[DepthQuote]
+    asks: list[DepthQuote]
+    timestamp: int
+    
+    @property
+    def datetime(self) -> datetime:
+        """Get snapshot time as datetime."""
+        return datetime.fromtimestamp(self.timestamp / 1000.0, tz=timezone.utc)
+    
+    @property
+    def best_bid(self) -> Optional[DepthQuote]:
+        """Get best (highest) bid."""
+        return self.bids[0] if self.bids else None
+    
+    @property
+    def best_ask(self) -> Optional[DepthQuote]:
+        """Get best (lowest) ask."""
+        return self.asks[0] if self.asks else None
+    
+    @property
+    def spread(self) -> Optional[float]:
+        """Calculate spread between best bid and ask."""
+        if self.best_bid and self.best_ask:
+            return self.best_ask.price - self.best_bid.price
+        return None
+    
+    def total_bid_volume(self, levels: Optional[int] = None) -> float:
+        """Calculate total bid volume for top N levels."""
+        bids = self.bids[:levels] if levels else self.bids
+        return sum(quote.volume for quote in bids)
+    
+    def total_ask_volume(self, levels: Optional[int] = None) -> float:
+        """Calculate total ask volume for top N levels."""
+        asks = self.asks[:levels] if levels else self.asks
+        return sum(quote.volume for quote in asks)
+
+
+@dataclass
+class MarginInfo:
+    """Expected margin calculation result.
+    
+    Represents the margin required for a proposed trade.
+    
+    Attributes:
+        margin: Required margin amount in deposit currency
+        symbol_id: Symbol identifier for the calculation
+        volume: Volume in lots
+        money_digits: Decimal places for money values
+        buy_margin: Margin for buy order (optional)
+        sell_margin: Margin for sell order (optional)
+    """
+    
+    margin: float
+    symbol_id: int
+    volume: float
+    money_digits: int = 2
+    buy_margin: Optional[float] = None
+    sell_margin: Optional[float] = None
+    
+    @property
+    def formatted_margin(self) -> str:
+        """Get margin formatted with proper decimals."""
+        return f"{self.margin:.{self.money_digits}f}"
+
+
+@dataclass
+class PositionPnL:
+    """Detailed position profit/loss breakdown.
+    
+    Provides comprehensive PnL information for a position including
+    gross/net unrealized PnL, swap, commission, and other costs.
+    
+    Attributes:
+        position_id: Position identifier
+        gross_unrealized_pnl: Gross unrealized profit/loss
+        net_unrealized_pnl: Net unrealized PnL (after costs)
+        swap: Accumulated swap charges
+        commission: Accumulated commission
+        used_margin: Margin used by this position
+        money_digits: Decimal places for money values
+        timestamp: Calculation timestamp
+    """
+    
+    position_id: int
+    gross_unrealized_pnl: float
+    net_unrealized_pnl: float
+    swap: float = 0.0
+    commission: float = 0.0
+    used_margin: Optional[float] = None
+    money_digits: int = 2
+    timestamp: Optional[int] = None
+    
+    @property
+    def total_costs(self) -> float:
+        """Calculate total costs (swap + commission)."""
+        return abs(self.swap) + abs(self.commission)
+    
+    @property
+    def datetime(self) -> Optional[datetime]:
+        """Get calculation time as datetime."""
+        if self.timestamp:
+            return datetime.fromtimestamp(self.timestamp / 1000.0, tz=timezone.utc)
+        return None
+    
+    @property
+    def formatted_gross_pnl(self) -> str:
+        """Get gross PnL formatted with proper decimals."""
+        return f"{self.gross_unrealized_pnl:+.{self.money_digits}f}"
+    
+    @property
+    def formatted_net_pnl(self) -> str:
+        """Get net PnL formatted with proper decimals."""
+        return f"{self.net_unrealized_pnl:+.{self.money_digits}f}"
+
+
+@dataclass
+class MarginCall:
+    """Margin call information.
+    
+    Represents an active or historical margin call on the account.
+    
+    Attributes:
+        margin_call_type: Type of margin call (e.g., "MARGIN_CALL", "STOP_OUT")
+        equity: Account equity at margin call time
+        margin: Used margin at margin call time
+        margin_level: Margin level percentage
+        timestamp: Margin call timestamp
+        money_digits: Decimal places for money values
+    """
+    
+    margin_call_type: str
+    equity: float
+    margin: float
+    margin_level: float
+    timestamp: int
+    money_digits: int = 2
+    
+    @property
+    def datetime(self) -> datetime:
+        """Get margin call time as datetime."""
+        return datetime.fromtimestamp(self.timestamp / 1000.0, tz=timezone.utc)
+    
+    @property
+    def formatted_equity(self) -> str:
+        """Get equity formatted with proper decimals."""
+        return f"{self.equity:.{self.money_digits}f}"
+    
+    @property
+    def formatted_margin_level(self) -> str:
+        """Get margin level as percentage."""
+        return f"{self.margin_level:.2f}%"
+
+
+@dataclass
 class Candle:
     """OHLC candlestick data.
     

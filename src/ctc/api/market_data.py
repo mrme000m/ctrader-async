@@ -165,6 +165,66 @@ class MarketDataAPI:
             setattr(s, "_client", self._client)
         return s
     
+    def stream_depth(self, symbol: str, depth: int = 10):
+        """Stream real-time order book depth (Level II market data).
+        
+        Args:
+            symbol: Symbol name
+            depth: Number of price levels to receive (default: 10)
+            
+        Returns:
+            Async context manager that yields DepthSnapshot objects
+            
+        Example:
+            >>> async with market_data.stream_depth("EURUSD", depth=10) as stream:
+            ...     async for snapshot in stream:
+            ...         print(f"Best bid: {snapshot.best_bid.price} ({snapshot.best_bid.volume} lots)")
+            ...         print(f"Best ask: {snapshot.best_ask.price} ({snapshot.best_ask.volume} lots)")
+            ...         print(f"Spread: {snapshot.spread}")
+            ...         print(f"Total bid volume (5 levels): {snapshot.total_bid_volume(5)}")
+        """
+        from ..streams import DepthStream
+        
+        s = DepthStream(self.protocol, self.config, self.symbols, symbol, depth)
+        # Attach client for reconnect recovery
+        if self._client is not None:
+            setattr(s, "_client", self._client)
+        return s
+    
+    def stream_candles(self, symbol: str, timeframe: "TimeFrame"):
+        """Stream real-time candlestick data as candles form.
+        
+        Streams live candle updates as they develop. Each update provides
+        the current OHLC values for the forming candle.
+        
+        Args:
+            symbol: Symbol name
+            timeframe: Candle timeframe (e.g., TimeFrame.M1, TimeFrame.H1)
+            
+        Returns:
+            Async context manager that yields Candle objects
+            
+        Example:
+            >>> from ctc.enums import TimeFrame
+            >>> async with market_data.stream_candles("EURUSD", TimeFrame.M5) as stream:
+            ...     async for candle in stream:
+            ...         print(f"Candle: O={candle.open:.5f} H={candle.high:.5f} "
+            ...               f"L={candle.low:.5f} C={candle.close:.5f} V={candle.volume}")
+            ...         
+            ...         # Check for bullish/bearish candle
+            ...         if candle.close > candle.open:
+            ...             print("  → Bullish candle")
+            ...         elif candle.close < candle.open:
+            ...             print("  → Bearish candle")
+        """
+        from ..streams import CandleStream
+        
+        s = CandleStream(self.protocol, self.config, self.symbols, symbol, timeframe)
+        # Attach client for reconnect recovery
+        if self._client is not None:
+            setattr(s, "_client", self._client)
+        return s
+    
     def _parse_candle(self, bar: any, symbol_info: any, timeframe: TimeFrame) -> Candle:
         """Parse candle from protobuf data."""
         # cTrader uses deltas for OHLC
