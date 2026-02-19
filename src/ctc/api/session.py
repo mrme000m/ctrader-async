@@ -110,29 +110,26 @@ class SessionAPI:
         # Parse accounts
         accounts = []
         
+        # ProtoOACtidTraderAccount fields:
+        #   ctidTraderAccountId, isLive, traderLogin,
+        #   lastClosingDealTimestamp, lastBalanceUpdateTimestamp
+        # NOTE: brokerName is NOT available here — only via ProtoOATraderReq
         if hasattr(response, 'ctidTraderAccount'):
             for account_proto in response.ctidTraderAccount:
                 account_id = getattr(account_proto, 'ctidTraderAccountId', None)
                 if account_id is None:
                     continue
-                
-                # Determine account type
-                is_live = getattr(account_proto, 'isLive', False)
+
+                is_live = bool(getattr(account_proto, 'isLive', False))
                 account_type = "LIVE" if is_live else "DEMO"
-                
-                # Get broker name if available
-                broker_name = getattr(account_proto, 'brokerName', '')
-                
-                # Get currency if available
-                # Note: Currency might not be in account list response
-                # Would need separate account info call to get it
-                
+                trader_login = getattr(account_proto, 'traderLogin', None)
+
                 accounts.append(AccountSummary(
                     account_id=account_id,
                     account_type=account_type,
-                    broker_name=broker_name,
+                    broker_name=str(trader_login) if trader_login else "",
                     is_live=is_live,
-                    currency=""  # Would need separate call
+                    currency="",  # requires separate ProtoOATraderReq call
                 ))
         
         logger.info(f"Retrieved {len(accounts)} accounts")
@@ -294,16 +291,10 @@ class SessionAPI:
         if profile_proto is None:
             raise ValueError("No profile in response")
 
+        # ProtoOACtidProfile only has: userId
+        # (nickname, email, etc. are NOT in this protobuf message)
         result = {
             "user_id": getattr(profile_proto, "userId", None),
-            "nickname": getattr(profile_proto, "nickname", ""),
-            "email": getattr(profile_proto, "email", ""),
-            "first_name": getattr(profile_proto, "firstName", ""),
-            "last_name": getattr(profile_proto, "lastName", ""),
-            "phone": getattr(profile_proto, "phone", ""),
-            "gender": getattr(profile_proto, "gender", ""),
-            "preferred_lang": getattr(profile_proto, "preferredLang", ""),
-            "utm_source": getattr(profile_proto, "utmSource", ""),
         }
 
         logger.info(f"Retrieved cTID profile for user_id={result['user_id']}")

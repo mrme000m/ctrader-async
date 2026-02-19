@@ -313,43 +313,48 @@ class RiskAPI:
             ProtoOAGetPositionUnrealizedPnLRes,
         )
         
-        # Build request
+        # ProtoOAGetPositionUnrealizedPnLReq has NO positionId field —
+        # it returns unrealised PnL for ALL open positions at once.
         req = ProtoOAGetPositionUnrealizedPnLReq()
         req.ctidTraderAccountId = self.config.account_id
-        req.positionId = position_id
-        
+
         # Send request
         response = await self.protocol.send_request(
             req,
             timeout=self.config.request_timeout,
-            request_type="PositionUnrealizedPnL"
+            request_type="PositionUnrealizedPnL",
         )
-        
+
         if not isinstance(response, ProtoOAGetPositionUnrealizedPnLRes):
             raise ValueError(f"Unexpected response type: {type(response)}")
-        
-        # Check if position exists
-        if hasattr(response, 'positionId') and response.positionId != position_id:
-            return None
-        
-        # Parse response
-        money_digits = getattr(response, 'moneyDigits', 2)
+
+        # ProtoOAGetPositionUnrealizedPnLRes fields:
+        #   positionUnrealizedPnL (repeated ProtoOAPositionUnrealizedPnL), moneyDigits
+        # ProtoOAPositionUnrealizedPnL fields: positionId, grossUnrealizedPnL, netUnrealizedPnL
+        money_digits = getattr(response, 'moneyDigits', 2) or 2
         divisor = 10 ** money_digits
-        
-        gross_pnl = getattr(response, 'grossUnrealizedPnL', 0) / divisor
-        net_pnl = getattr(response, 'netUnrealizedPnL', 0) / divisor
-        swap = getattr(response, 'swap', 0) / divisor
-        commission = getattr(response, 'commission', 0) / divisor
-        timestamp = getattr(response, 'timestamp', None)
-        
+
+        pnl_entries = list(getattr(response, 'positionUnrealizedPnL', []) or [])
+        entry = next(
+            (e for e in pnl_entries if getattr(e, 'positionId', None) == position_id),
+            pnl_entries[0] if pnl_entries else None,
+        )
+
+        if entry is None:
+            return None
+
+        gross_pnl = float(getattr(entry, 'grossUnrealizedPnL', 0) or 0) / divisor
+        net_pnl = float(getattr(entry, 'netUnrealizedPnL', 0) or 0) / divisor
+
+        import time
         return PositionPnLRealtime(
-            position_id=position_id,
+            position_id=int(getattr(entry, 'positionId', position_id)),
             gross_unrealized_pnl=gross_pnl,
             net_unrealized_pnl=net_pnl,
-            swap=swap,
-            commission=commission,
-            timestamp=timestamp,
-            money_digits=money_digits
+            swap=0.0,        # not in ProtoOAPositionUnrealizedPnL
+            commission=0.0,  # not in ProtoOAPositionUnrealizedPnL
+            timestamp=int(time.time() * 1000),
+            money_digits=money_digits,
         )
     
     async def get_margin_calls(self) -> list[MarginCall]:
@@ -387,29 +392,33 @@ class RiskAPI:
         if not isinstance(response, ProtoOAMarginCallListRes):
             raise ValueError(f"Unexpected response type: {type(response)}")
         
-        # Parse margin calls
+        # ProtoOAMarginCall fields: marginCallType, marginLevelThreshold,
+        # utcLastUpdateTimestamp.
+        # NOTE: There is NO equity/margin/marginLevel on this message —
+        # it only stores the *threshold* configuration, not live account state.
         margin_calls = []
-        money_digits = getattr(response, 'moneyDigits', None) or 2
-        
+
         if hasattr(response, 'marginCall'):
             for mc in response.marginCall:
-                margin_call_type = getattr(mc, 'marginCallType', 'UNKNOWN')
-                
-                # Convert from protocol units
-                equity = getattr(mc, 'equity', 0) / (10 ** money_digits)
-                margin = getattr(mc, 'margin', 0) / (10 ** money_digits)
-                margin_level = getattr(mc, 'marginLevel', 0.0)
-                timestamp = getattr(mc, 'marginCallTimestamp', 0)
-                
+                from ..messages.OpenApiModelMessages_pb2 import ProtoOANotificationType
+                mc_type_val = getattr(mc, 'marginCallType', None)
+                try:
+                    mc_type = ProtoOANotificationType.Name(int(mc_type_val)) if mc_type_val is not None else 'UNKNOWN'
+                except Exception:
+                    mc_type = str(mc_type_val) if mc_type_val is not None else 'UNKNOWN'
+
+                threshold = float(getattr(mc, 'marginLevelThreshold', 0.0) or 0.0)
+                timestamp = int(getattr(mc, 'utcLastUpdateTimestamp', 0) or 0)
+
                 margin_calls.append(MarginCall(
-                    margin_call_type=str(margin_call_type),
-                    equity=equity,
-                    margin=margin,
-                    margin_level=margin_level,
+                    margin_call_type=mc_type,
+                    equity=0.0,         # not available on threshold config
+                    margin=0.0,         # not available on threshold config
+                    margin_level=threshold,
                     timestamp=timestamp,
-                    money_digits=money_digits
+                    money_digits=2,
                 ))
-        
+
         return margin_calls
     
     async def get_dynamic_leverage(self, symbol: str) -> Optional[DynamicLeverage]:

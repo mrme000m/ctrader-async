@@ -188,11 +188,18 @@ class HistoryAPI:
             ProtoOADealListByPositionIdReq,
             ProtoOADealListByPositionIdRes,
         )
-        
+
+        # ProtoOADealListByPositionIdReq requires fromTimestamp and toTimestamp
+        # Use a wide window to get all deals for the position
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        far_past_ms = 0  # epoch = get all history
+
         # Build request
         req = ProtoOADealListByPositionIdReq()
         req.ctidTraderAccountId = self.config.account_id
         req.positionId = position_id
+        req.fromTimestamp = far_past_ms
+        req.toTimestamp = now_ms
         
         # Send request
         response = await self.protocol.send_request(
@@ -300,20 +307,22 @@ class HistoryAPI:
                 if symbol_info:
                     volume = symbol_info.protocol_volume_to_lots(volume_proto)
             
-            # Parse side
-            trade_side = getattr(deal_proto, 'tradeSide', None)
+            # Parse side using enum names (avoid hardcoded ints)
+            from ..messages.OpenApiModelMessages_pb2 import ProtoOATradeSide
+            trade_side_val = getattr(deal_proto, 'tradeSide', None)
             side = None
-            if trade_side == 1:
-                side = "BUY"
-            elif trade_side == 2:
-                side = "SELL"
+            if trade_side_val is not None:
+                try:
+                    side = ProtoOATradeSide.Name(int(trade_side_val))
+                except Exception:
+                    side = str(trade_side_val)
             
-            # Parse execution price
+            # executionPrice in ProtoOADeal is a proto double — already a real price,
+            # no scaling needed (unlike price fields in ProtoOAPosition/ProtoOAOrder
+            # which use int scaled by 10^digits).
             execution_price = getattr(deal_proto, 'executionPrice', None)
-            if execution_price and symbol_id:
-                symbol_info = await self.symbols.get_symbol_by_id(symbol_id)
-                if symbol_info:
-                    execution_price = execution_price / (10 ** symbol_info.digits)
+            if execution_price:
+                execution_price = float(execution_price)
             
             # Parse money values
             money_digits = getattr(deal_proto, 'moneyDigits', None) or 2
@@ -355,20 +364,27 @@ class HistoryAPI:
     
     async def _parse_order(self, order_proto) -> Optional[Order]:
         """Parse an order from protobuf message.
-        
-        Args:
-            order_proto: ProtoOAOrder message
-            
-        Returns:
-            Order object or None
+
+        ProtoOAOrder fields:
+            orderId, tradeData (ProtoOATradeData), orderType, orderStatus,
+            expirationTimestamp, executionPrice, executedVolume,
+            utcLastUpdateTimestamp, limitPrice, stopPrice, stopLoss,
+            takeProfit, clientOrderId, timeInForce, positionId,
+            trailingStopLoss, stopTriggerMethod
+
+        ProtoOATradeData fields:
+            symbolId, volume, tradeSide, openTimestamp, label,
+            guaranteedStopLoss, comment
         """
         try:
             order_id = getattr(order_proto, 'orderId', None)
             if order_id is None:
                 return None
-            
-            symbol_id = getattr(order_proto, 'tradeData', {}).get('symbolId', None) if hasattr(order_proto, 'tradeData') else None
-            
+
+            # tradeData is a nested ProtoOATradeData message — access as attribute, not dict
+            trade_data = getattr(order_proto, 'tradeData', None)
+            symbol_id = int(getattr(trade_data, 'symbolId', 0)) if trade_data else None
+
             # Get symbol name and info
             symbol_name = None
             symbol_info = None
@@ -376,150 +392,142 @@ class HistoryAPI:
                 symbol_info = await self.symbols.get_symbol_by_id(symbol_id)
                 if symbol_info:
                     symbol_name = symbol_info.name
-            
-            # Parse volume
-            volume_proto = getattr(order_proto, 'tradeData', {}).get('volume', None) if hasattr(order_proto, 'tradeData') else None
+
+            # Parse volume from tradeData
+            volume_proto = int(getattr(trade_data, 'volume', 0)) if trade_data else 0
             volume = None
             if volume_proto and symbol_info:
                 volume = symbol_info.protocol_volume_to_lots(volume_proto)
-            
-            # Parse side
-            trade_side = getattr(order_proto, 'tradeData', {}).get('tradeSide', None) if hasattr(order_proto, 'tradeData') else None
-            side = None
-            if trade_side == 1:
-                side = "BUY"
-            elif trade_side == 2:
-                side = "SELL"
-            
-            # Parse order type
-            order_type_proto = getattr(order_proto, 'orderType', None)
-            order_type_map = {
-                1: "MARKET",
-                2: "LIMIT",
-                3: "STOP",
-                4: "STOP_LIMIT",
-                5: "MARKET_RANGE"
-            }
-            order_type = order_type_map.get(order_type_proto, "UNKNOWN")
-            
-            # Parse status
-            status_proto = getattr(order_proto, 'orderStatus', None)
-            status_map = {
-                1: "PENDING",
-                2: "FILLED",
-                3: "CANCELLED",
-                4: "REJECTED",
-                5: "EXPIRED"
-            }
-            status = status_map.get(status_proto, "UNKNOWN")
-            
-            # Parse timestamps
-            create_timestamp = getattr(order_proto, 'utcLastUpdateTimestamp', None)
-            
+            elif volume_proto:
+                volume = float(volume_proto) / 100.0
+
+            # Parse side from tradeData using enum names
+            from ..messages.OpenApiModelMessages_pb2 import ProtoOATradeSide
+            trade_side_val = int(getattr(trade_data, 'tradeSide', 0)) if trade_data else 0
+            side = ProtoOATradeSide.Name(trade_side_val) if trade_side_val else "UNKNOWN"
+
+            # Parse order type using enum names
+            from ..messages.OpenApiModelMessages_pb2 import ProtoOAOrderType
+            order_type_val = getattr(order_proto, 'orderType', None)
+            order_type = "UNKNOWN"
+            if order_type_val is not None:
+                try:
+                    order_type = ProtoOAOrderType.Name(int(order_type_val))
+                except Exception:
+                    order_type = str(order_type_val)
+
+            # Parse status using enum names
+            from ..messages.OpenApiModelMessages_pb2 import ProtoOAOrderStatus
+            status_val = getattr(order_proto, 'orderStatus', None)
+            status = "UNKNOWN"
+            if status_val is not None:
+                try:
+                    status = ProtoOAOrderStatus.Name(int(status_val))
+                except Exception:
+                    status = str(status_val)
+
+            # Timestamps: tradeData.openTimestamp = creation time
+            create_timestamp = int(getattr(trade_data, 'openTimestamp', 0) or 0) if trade_data else None
+            last_update_timestamp = int(getattr(order_proto, 'utcLastUpdateTimestamp', 0) or 0) or None
+            expiration_timestamp = int(getattr(order_proto, 'expirationTimestamp', 0) or 0) or None
+
+            # Prices
+            limit_price_raw = getattr(order_proto, 'limitPrice', None)
+            stop_price_raw = getattr(order_proto, 'stopPrice', None)
+            stop_loss_raw = getattr(order_proto, 'stopLoss', None)
+            take_profit_raw = getattr(order_proto, 'takeProfit', None)
+            price_scale = 10 ** (symbol_info.digits if symbol_info else 5)
+
+            def to_price(raw):
+                if not raw:
+                    return None
+                return float(raw) / price_scale
+
             return Order(
                 id=order_id,
                 symbol_id=symbol_id or 0,
                 symbol_name=symbol_name,
                 volume=volume or 0.0,
-                side=side or "UNKNOWN",
+                side=side,
                 order_type=order_type,
                 status=status,
-                create_timestamp=create_timestamp
+                limit_price=to_price(limit_price_raw),
+                stop_price=to_price(stop_price_raw),
+                stop_loss=to_price(stop_loss_raw),
+                take_profit=to_price(take_profit_raw),
+                client_order_id=getattr(order_proto, 'clientOrderId', None) or None,
+                label=getattr(trade_data, 'label', None) or None,
+                comment=getattr(trade_data, 'comment', None) or None,
+                create_timestamp=create_timestamp or None,
+                last_update_timestamp=last_update_timestamp,
+                expiration_timestamp=expiration_timestamp,
             )
-        
+
         except Exception as e:
             logger.error(f"Error parsing order: {e}", exc_info=True)
             return None
     
-    async def get_deal_offsets(
-        self,
-        from_timestamp: Optional[int] = None,
-        to_timestamp: Optional[int] = None,
-        days: Optional[int] = None
-    ) -> list[DealOffset]:
-        """Get deal offsets for netting accounts.
-        
-        In netting accounts, positions are tracked as net volume per symbol.
-        Deal offsets track which opening deals were closed by which closing deals.
-        This is primarily useful for reconciliation and tax reporting.
-        
+    async def get_deal_offsets(self, deal_id: int) -> list[DealOffset]:
+        """Get deal offsets for a specific deal (netting accounts).
+
+        Uses ``ProtoOADealOffsetListReq`` which takes a single ``dealId`` and
+        returns two lists: deals that *this* deal offsets (``offsetBy``) and
+        deals that offset *this* deal (``offsetting``).
+
+        ``ProtoOADealOffset`` fields: ``dealId``, ``volume``,
+        ``executionTimestamp``, ``executionPrice``.
+
         Args:
-            from_timestamp: Start time in milliseconds (optional)
-            to_timestamp: End time in milliseconds (optional)
-            days: Get offsets from last N days (alternative to timestamps)
-            
+            deal_id: The deal ID to look up offsets for.
+
         Returns:
-            List of DealOffset objects
-            
+            List of DealOffset objects from both offsetBy and offsetting lists.
+
         Example:
-            >>> # Get deal offsets from last 30 days
-            >>> offsets = await client.history.get_deal_offsets(days=30)
+            >>> offsets = await client.history.get_deal_offsets(deal_id=123456)
             >>> for offset in offsets:
-            ...     print(f"Deal {offset.open_deal_id} closed by {offset.close_deal_id}")
+            ...     print(f"Offset deal {offset.open_deal_id} vol={offset.volume}")
         """
         from ..messages.OpenApiMessages_pb2 import (
             ProtoOADealOffsetListReq,
             ProtoOADealOffsetListRes,
         )
-        
-        # Calculate timestamps if days specified
-        if days is not None:
-            to_timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
-            from_timestamp = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp() * 1000)
-        
-        # Default to last 30 days if no time range specified
-        if from_timestamp is None:
-            from_timestamp = int((datetime.now(timezone.utc) - timedelta(days=30)).timestamp() * 1000)
-        if to_timestamp is None:
-            to_timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
-        
+
+        req = ProtoOADealOffsetListReq()
+        req.ctidTraderAccountId = self.config.account_id
+        req.dealId = int(deal_id)
+
+        response = await self.protocol.send_request(
+            req,
+            timeout=self.config.request_timeout,
+            request_type="DealOffsetList",
+        )
+
+        if not isinstance(response, ProtoOADealOffsetListRes):
+            raise ValueError(f"Unexpected response type: {type(response)}")
+
         offsets = []
-        has_more = True
-        
-        # Pagination loop
-        while has_more:
-            # Build request
-            req = ProtoOADealOffsetListReq()
-            req.ctidTraderAccountId = self.config.account_id
-            req.fromTimestamp = from_timestamp
-            req.toTimestamp = to_timestamp
-            req.maxRows = 100  # Request in chunks
-            
-            # Send request
-            response = await self.protocol.send_request(
-                req,
-                timeout=self.config.request_timeout,
-                request_type="DealOffsetList"
-            )
-            
-            if not isinstance(response, ProtoOADealOffsetListRes):
-                raise ValueError(f"Unexpected response type: {type(response)}")
-            
-            # Parse offsets
-            if hasattr(response, 'dealOffset'):
-                for offset_proto in response.dealOffset:
-                    offset_id = getattr(offset_proto, 'id', 0)
-                    open_deal_id = getattr(offset_proto, 'openDealId', 0)
-                    close_deal_id = getattr(offset_proto, 'closeDealId', 0)
-                    volume = getattr(offset_proto, 'volume', 0) / 100.0  # Convert to lots
-                    timestamp = getattr(offset_proto, 'createTimestamp', 0)
-                    
-                    offsets.append(DealOffset(
-                        offset_id=offset_id,
-                        open_deal_id=open_deal_id,
-                        close_deal_id=close_deal_id,
-                        volume=volume,
-                        timestamp=timestamp
-                    ))
-            
-            # Check for more data
-            has_more = getattr(response, 'hasMore', False)
-            if has_more and offsets:
-                # Update fromTimestamp to get next page
-                last_offset = offsets[-1]
-                from_timestamp = last_offset.timestamp + 1
-        
-        logger.info(f"Retrieved {len(offsets)} deal offsets")
+
+        # ProtoOADealOffset: dealId, volume, executionTimestamp, executionPrice
+        for offset_proto in list(getattr(response, 'offsetBy', []) or []):
+            offsets.append(DealOffset(
+                offset_id=int(deal_id),
+                open_deal_id=int(deal_id),
+                close_deal_id=int(getattr(offset_proto, 'dealId', 0)),
+                volume=float(getattr(offset_proto, 'volume', 0)) / 100.0,
+                timestamp=int(getattr(offset_proto, 'executionTimestamp', 0)),
+            ))
+
+        for offset_proto in list(getattr(response, 'offsetting', []) or []):
+            offsets.append(DealOffset(
+                offset_id=int(deal_id),
+                open_deal_id=int(getattr(offset_proto, 'dealId', 0)),
+                close_deal_id=int(deal_id),
+                volume=float(getattr(offset_proto, 'volume', 0)) / 100.0,
+                timestamp=int(getattr(offset_proto, 'executionTimestamp', 0)),
+            ))
+
+        logger.info(f"Retrieved {len(offsets)} deal offsets for deal {deal_id}")
         return offsets
     
     async def get_orders_by_position(self, position_id: int) -> list[Order]:

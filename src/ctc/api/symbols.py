@@ -275,9 +275,17 @@ class SymbolCatalog:
             if not symbols:
                 return None
 
+            # ProtoOASymbol (full) has no symbolName — preserve it from cache
+            async with self._lock:
+                cached = self._symbols_by_id.get(int(symbol_id))
+
             symbol = self._parse_symbol(symbols[0])
 
-            # Update the cache with the fresh data
+            # Restore name from the cached light symbol if full symbol has none
+            if not symbol.name and cached and cached.name:
+                symbol.name = cached.name
+
+            # Update the cache with the enriched data (leverage_id etc.)
             async with self._lock:
                 self._symbols_by_id[symbol.id] = symbol
                 if symbol.name:
@@ -351,7 +359,7 @@ class SymbolCatalog:
             lot_size=getattr(symbol_data, 'lotSize', 100000 * 100),
             min_volume=getattr(symbol_data, 'minVolume', None),
             max_volume=getattr(symbol_data, 'maxVolume', None),
-            volume_step=getattr(symbol_data, 'volumeStep', None),
+            volume_step=getattr(symbol_data, 'stepVolume', None),
             enable_short_selling=getattr(symbol_data, 'enableShortSelling', None),
             guaranteed_stop_loss=getattr(symbol_data, 'guaranteedStopLoss', None),
             swap_long=getattr(symbol_data, 'swapLong', None),

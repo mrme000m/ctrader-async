@@ -494,53 +494,61 @@ class AccountAPI:
         req.fromTimestamp = from_timestamp
         req.toTimestamp = to_timestamp
         
+        # ProtoOACashFlowHistoryListReq has no maxRows field —
+        # pagination is driven by fromTimestamp/toTimestamp only.
         entries = []
         has_more = True
-        
+
         # Pagination loop
         while has_more and len(entries) < max_rows:
-            req.maxRows = min(100, max_rows - len(entries))  # Request in chunks
-            
             # Send request
             response = await self.protocol.send_request(
                 req,
                 timeout=self.config.request_timeout,
-                request_type="CashFlowHistoryList"
+                request_type="CashFlowHistoryList",
             )
-            
+
             if not isinstance(response, ProtoOACashFlowHistoryListRes):
                 raise ValueError(f"Unexpected response type: {type(response)}")
-            
-            # Parse response
-            money_digits = getattr(response, 'moneyDigits', 2)
+
+            # moneyDigits lives on individual ProtoOADepositWithdraw entries
+            money_digits = 2
             divisor = 10 ** money_digits
             
+            # ProtoOADepositWithdraw actual fields:
+            #   operationType, balanceHistoryId, balance, delta,
+            #   changeBalanceTimestamp, externalNote, balanceVersion,
+            #   equity, moneyDigits
             if hasattr(response, 'depositWithdraw'):
                 for entry_proto in response.depositWithdraw:
-                    entry_id = getattr(entry_proto, 'depositWithdrawId', 0)
-                    
-                    # Determine type from changeBalanceType
-                    change_type = getattr(entry_proto, 'changeBalanceType', None)
+                    entry_id = int(getattr(entry_proto, 'balanceHistoryId', 0) or 0)
+
+                    # Determine type from operationType enum
+                    from ..messages.OpenApiModelMessages_pb2 import ProtoOAChangeBonusType
+                    op_type_val = getattr(entry_proto, 'operationType', None)
                     cf_type = CashFlowType.UNKNOWN
-                    if change_type:
-                        type_name = str(change_type)
-                        if 'DEPOSIT' in type_name:
+                    if op_type_val is not None:
+                        try:
+                            type_name = str(op_type_val)
+                        except Exception:
+                            type_name = ''
+                        if 'DEPOSIT' in type_name.upper():
                             cf_type = CashFlowType.DEPOSIT
-                        elif 'WITHDRAWAL' in type_name:
+                        elif 'WITHDRAWAL' in type_name.upper() or 'WITHDRAW' in type_name.upper():
                             cf_type = CashFlowType.WITHDRAWAL
-                        elif 'DIVIDEND' in type_name:
+                        elif 'DIVIDEND' in type_name.upper():
                             cf_type = CashFlowType.DIVIDEND
-                        elif 'COMMISSION' in type_name:
+                        elif 'COMMISSION' in type_name.upper():
                             cf_type = CashFlowType.COMMISSION
-                        elif 'SWAP' in type_name:
+                        elif 'SWAP' in type_name.upper():
                             cf_type = CashFlowType.SWAP
-                    
-                    # Parse amounts
-                    amount = getattr(entry_proto, 'amount', 0) / divisor
-                    balance_after = getattr(entry_proto, 'balance', 0) / divisor
-                    timestamp = getattr(entry_proto, 'createTimestamp', 0)
-                    description = getattr(entry_proto, 'description', None)
-                    
+
+                    # delta = change in balance (positive = credit, negative = debit)
+                    amount = float(getattr(entry_proto, 'delta', 0) or 0) / divisor
+                    balance_after = float(getattr(entry_proto, 'balance', 0) or 0) / divisor
+                    timestamp = int(getattr(entry_proto, 'changeBalanceTimestamp', 0) or 0)
+                    description = getattr(entry_proto, 'externalNote', None) or None
+
                     entries.append(CashFlowEntry(
                         entry_id=entry_id,
                         type=cf_type,
@@ -548,7 +556,7 @@ class AccountAPI:
                         balance_after=balance_after,
                         timestamp=timestamp,
                         description=description,
-                        money_digits=money_digits
+                        money_digits=money_digits,
                     ))
             
             # Check for more data
