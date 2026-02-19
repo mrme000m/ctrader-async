@@ -174,8 +174,14 @@ class TickStream:
             self._subscribed = False
             logger.info(f"Unsubscribed from {self.symbol} ticks")
         
+        except ConnectionError:
+            # Expected during disconnect - ignore
+            self._subscribed = False
+            logger.debug(f"Unsubscribe from {self.symbol} skipped: transport disconnected")
         except Exception as e:
-            logger.error(f"Failed to unsubscribe from ticks: {e}", exc_info=True)
+            # Log at debug level as this is expected during disconnect
+            logger.debug(f"Unsubscribe error for {self.symbol} (expected during disconnect): {e}")
+            self._subscribed = False
     
     async def _on_tick(self, message):
         """Handle incoming tick event."""

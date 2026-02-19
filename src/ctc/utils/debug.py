@@ -116,7 +116,14 @@ def trace_exceptions_enabled() -> bool:
 # Debug Mode Management
 # ============================================================================
 
-def set_debug_mode(enabled: bool, *, include_connection: bool = True) -> None:
+def set_debug_mode(
+    enabled: bool = True,
+    *,
+    connection: Optional[bool] = None,
+    protocol: Optional[bool] = None,
+    log_calls: Optional[bool] = None,
+    include_connection: Optional[bool] = None,
+) -> None:
     """Enable or disable debug mode at runtime.
     
     This function updates the internal debug state and configures
@@ -124,24 +131,44 @@ def set_debug_mode(enabled: bool, *, include_connection: bool = True) -> None:
     
     Args:
         enabled: Whether to enable debug mode
-        include_connection: Also enable connection debug logging
+        connection: Enable connection debugging (alias for include_connection)
+        protocol: Enable protocol debugging
+        log_calls: Enable call logging
+        include_connection: Deprecated, use connection instead
         
     Example:
         >>> set_debug_mode(True)  # Enable all debug features
         >>> set_debug_mode(False)  # Disable debug mode
+        >>> set_debug_mode(connection=True, protocol=False)  # Fine-grained control
     """
+    # Handle alias: connection takes precedence over include_connection
+    if connection is not None and include_connection is None:
+        include_connection = connection
+    elif include_connection is None:
+        include_connection = True
+    
     # Clear the lru_cache for debug mode checks
     debug_mode_enabled.cache_clear()
     connection_debug_enabled.cache_clear()
+    protocol_debug_enabled.cache_clear()
+    log_calls_enabled.cache_clear()
     
     # Set environment variable for this process
     if enabled:
         os.environ["CTRADER_DEBUG"] = "1"
         if include_connection:
             os.environ["CTRADER_CONNECTION_DEBUG"] = "1"
+        if protocol:
+            os.environ["CTRADER_PROTOCOL_DEBUG"] = "1"
+        if log_calls:
+            os.environ["CTRADER_LOG_CALLS"] = "1"
     else:
         os.environ.pop("CTRADER_DEBUG", None)
         os.environ.pop("CTRADER_CONNECTION_DEBUG", None)
+        if protocol is not None and not protocol:
+            os.environ.pop("CTRADER_PROTOCOL_DEBUG", None)
+        if log_calls is not None and not log_calls:
+            os.environ.pop("CTRADER_LOG_CALLS", None)
     
     # Update logging level
     root_logger = logging.getLogger()

@@ -5,6 +5,7 @@ Market data API with streaming support.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Optional, TYPE_CHECKING, AsyncIterator
 from datetime import datetime, timezone
 
@@ -343,6 +344,47 @@ class MarketDataAPI:
         except Exception as e:
             logger.error(f"Failed to get tick data: {e}", exc_info=True)
             raise
+
+    async def get_symbol_price(self, symbol: str) -> Optional[Tick]:
+        """Get current price for a symbol.
+        
+        Returns the latest available tick data for the symbol.
+        This is a convenience method for getting current bid/ask prices.
+        
+        Args:
+            symbol: Symbol name (e.g., "EURUSD")
+            
+        Returns:
+            Tick object with current prices, or None if unavailable
+            
+        Example:
+            >>> tick = await market_data.get_symbol_price("EURUSD")
+            >>> if tick:
+            ...     print(f"Bid: {tick.bid}, Ask: {tick.ask}, Spread: {tick.spread}")
+        """
+        # Try to get from tick store if available via client
+        client = getattr(self, '_client', None)
+        if client is not None and hasattr(client, 'ticks'):
+            tick = client.ticks.get(symbol)
+            if tick:
+                return tick
+        
+        # Fetch from symbol info as fallback
+        symbol_info = await self.symbols.get_symbol(symbol)
+        if symbol_info:
+            # Create a tick from symbol info (best effort - may not have live prices)
+            # Note: Symbol doesn't have bid/ask, so we return a minimal tick
+            return Tick(
+                symbol_id=symbol_info.id,
+                symbol_name=symbol_info.name,
+                bid=0.0,  # Will be populated when streaming starts
+                ask=0.0,
+                timestamp=int(time.time() * 1000)
+            )
+        return None
+
+    # Alias for backward compatibility
+    get_quote = get_symbol_price
 
     def _parse_candle(self, bar: any, symbol_info: any, timeframe: TimeFrame) -> Candle:
         """Parse candle from protobuf data.

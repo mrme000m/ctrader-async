@@ -76,11 +76,13 @@ class SymbolCatalog:
             logger.error(f"Failed to load symbols: {e}", exc_info=True)
             raise
     
-    async def get_symbol(self, symbol_name: str) -> Optional[Symbol]:
+    async def get_symbol(self, symbol_name: str, *, fetch_details_if_needed: bool = True) -> Optional[Symbol]:
         """Get symbol by name.
         
         Args:
             symbol_name: Symbol name (e.g., "EURUSD")
+            fetch_details_if_needed: If True, auto-fetch full symbol details when
+                volume constraints are missing (min_volume, max_volume, volume_step)
             
         Returns:
             Symbol object or None if not found
@@ -89,7 +91,20 @@ class SymbolCatalog:
             await self.load()
         
         async with self._lock:
-            return self._symbols_by_name.get(symbol_name.upper())
+            symbol = self._symbols_by_name.get(symbol_name.upper())
+        
+        # Auto-fetch symbol details if volume constraints are missing
+        if (fetch_details_if_needed and 
+            symbol is not None and 
+            symbol.min_volume is None):
+            try:
+                details = await self.get_symbol_details_by_id(symbol.id)
+                if details:
+                    return details
+            except Exception as e:
+                logger.debug(f"Failed to fetch symbol details for {symbol_name}: {e}")
+        
+        return symbol
     
     async def get_symbol_by_id(self, symbol_id: int) -> Optional[Symbol]:
         """Get symbol by ID.

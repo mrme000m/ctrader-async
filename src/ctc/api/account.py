@@ -249,12 +249,29 @@ class AccountAPI:
                 if leverage_in_cents:
                     leverage = float(leverage_in_cents) / 100.0
 
+                # Currency: resolve from depositAssetId via asset catalog if available
+                currency = None
+                deposit_asset_id = getattr(trader, 'depositAssetId', None)
+                if deposit_asset_id:
+                    try:
+                        if self._client and hasattr(self._client, 'assets'):
+                            asset = await self._client.assets.get_asset_by_id(deposit_asset_id)
+                            if asset:
+                                currency = asset.name
+                    except Exception:
+                        pass
+                
+                # Fallback: try to get from full account info cache if available
+                if not currency and self._cached_full_info:
+                    currency = self._cached_full_info.currency
+
                 self._cached_info = AccountInfo(
                     account_id=self.config.account_id,
                     balance=trader.balance / divisor,
                     equity=trader.balance / divisor,  # Will be updated with PnL
                     margin=0.0,
                     free_margin=trader.balance / divisor,
+                    currency=currency,
                     money_digits=money_digits,
                     account_type=account_type,
                     leverage=leverage,

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from ..models import MarginInfo, PositionPnL, PositionPnLRealtime, MarginCall
+from ..enums import TradeSide
 
 if TYPE_CHECKING:
     from ..protocol import ProtocolHandler
@@ -805,3 +806,112 @@ class RiskAPI:
             'risk_acceptable': risk_acceptable,
             'warnings': warnings
         }
+
+    async def get_max_volume_for_margin(
+        self, 
+        symbol: str, 
+        available_margin: float,
+        side: TradeSide = TradeSide.BUY,
+        safety_factor: float = 0.95
+    ) -> float:
+        """Calculate maximum volume that fits within available margin.
+        
+        This is useful for determining the largest position size that can
+        be opened with the current free margin.
+        
+        Args:
+            symbol: Symbol name (e.g., "EURUSD")
+            available_margin: Available margin in account currency
+            side: Trade side (BUY or SELL)
+            safety_factor: Safety multiplier (default 0.95 to leave 5% buffer)
+            
+        Returns:
+            Maximum volume in lots that can be traded
+            
+        Example:
+            >>> account = await client.account.get_info()
+            >>> max_vol = await client.risk.get_max_volume_for_margin(
+            ...     "EURUSD", 
+            ...     account.free_margin
+            ... )
+            >>> print(f"Can trade up to {max_vol:.2f} lots")
+        """
+        # Get margin for 1 lot
+        try:
+            margin_1lot = await self.get_expected_margin(symbol, 1.0, side.name)
+            per_lot = margin_1lot.margin
+        except Exception as e:
+            logger.debug(f"Failed to get margin for {symbol}: {e}")
+            return 0.0
+        
+        if per_lot <= 0:
+            return 0.0
+        
+        max_lots = (available_margin * safety_factor) / per_lot
+        
+        # Get symbol constraints
+        symbol_info = await self.symbols.get_symbol(symbol)
+        if symbol_info:
+            min_lots, max_lots_allowed, step_lots = symbol_info.volume_constraints_lots()
+            
+            # Apply constraints
+            if min_lots and max_lots < min_lots:
+                return 0.0  # Can't even trade minimum
+            if max_lots_allowed:
+                max_lots = min(max_lots, max_lots_allowed)
+        
+        return max_lots
+
+    async def can_trade_volume(
+        self, 
+        symbol: str, 
+        volume: float,
+        available_margin: Optional[float] = None
+    ) -> tuple[bool, str]:
+        """Check if a specific volume can be traded with available margin.
+        
+        Args:
+            symbol: Symbol name (e.g., "EURUSD")
+            volume: Desired volume in lots
+            available_margin: Available margin (if None, fetches from account)
+            
+        Returns:
+            Tuple of (can_trade: bool, reason: str)
+            
+        Example:
+            >>> can_trade, reason = await client.risk.can_trade_volume("EURUSD", 1.0)
+            >>> if can_trade:
+            ...     await client.trading.place_market_order("EURUSD", TradeSide.BUY, 1.0)
+            ... else:
+            ...     print(f"Cannot trade: {reason}")
+        """
+        if available_margin is None:
+            if self._client is None:
+                return False, "Risk API not attached to client - cannot fetch account info"
+            try:
+                account = await self._client.account.get_info()
+                available_margin = account.free_margin
+            except Exception as e:
+                return False, f"Failed to get account info: {e}"
+        
+        try:
+            expected = await self.get_expected_margin(symbol, volume)
+        except Exception as e:
+            return False, f"Failed to calculate margin: {e}"
+        
+        if expected.margin <= available_margin:
+            return True, "OK"
+        
+        # Calculate max possible for helpful message
+        try:
+            max_vol = await self.get_max_volume_for_margin(symbol, available_margin)
+            return False, (
+                f"Insufficient margin. Required: ${expected.margin:.2f}, "
+                f"Available: ${available_margin:.2f}, "
+                f"Max volume: {max_vol:.2f} lots"
+            )
+        except Exception:
+            return False, (
+                f"Insufficient margin. Required: ${expected.margin:.2f}, "
+                f"Available: ${available_margin:.2f}"
+            )

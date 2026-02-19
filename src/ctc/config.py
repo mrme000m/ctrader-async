@@ -98,7 +98,8 @@ class ClientConfig:
     message_max_size: int = 10 * 1024 * 1024  # 10MB max message size
 
     # Connection watchdog
-    stale_connection_timeout: Optional[float] = None  # None => auto (heartbeat_interval * 3)
+    stale_connection_timeout: Optional[float] = None  # None => auto (heartbeat_interval * 10, min 300s)
+    stale_connection_threshold_multiplier: float = 10.0  # Multiplier for heartbeat interval
     watchdog_check_interval: float = 5.0
 
     # Token auto-refresh

@@ -751,7 +751,10 @@ class CTraderClient:
             check_interval = max(0.5, float(getattr(self.config, "watchdog_check_interval", 5.0)))
             stale_timeout = getattr(self.config, "stale_connection_timeout", None)
             if stale_timeout is None:
-                stale_timeout = max(10.0, float(self.config.heartbeat_interval) * 3.0)
+                # Use configurable multiplier (default 10x) with 300s minimum
+                # to avoid false positives during trade bursts
+                multiplier = float(getattr(self.config, "stale_connection_threshold_multiplier", 10.0))
+                stale_timeout = max(300.0, float(self.config.heartbeat_interval) * multiplier)
             stale_timeout = float(stale_timeout)
 
             while not self._closing:

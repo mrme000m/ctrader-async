@@ -12,6 +12,15 @@ from typing import Optional, TYPE_CHECKING
 from ..models import Position, Order, Deal
 from ..enums import TradeSide, OrderType, TimeInForce, OrderTriggerMethod
 from ..utils.errors import TradingError, MarketClosedError, OrderError
+
+# Re-export enums for backward compatibility
+__all__ = [
+    "TradingAPI",
+    "TradeSide",
+    "OrderType", 
+    "TimeInForce",
+    "OrderTriggerMethod",
+]
 from ..utils.rate_limiter import TokenBucketRateLimiter
 
 if TYPE_CHECKING:
