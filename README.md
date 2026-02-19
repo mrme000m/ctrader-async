@@ -176,13 +176,13 @@ print(f"Required margin: {margin_info.formatted_margin}")
 validation = await client.risk.validate_trade_risk(
     symbol="EURUSD",
     volume=1.0,
-    side="BUY",
+    side=TradeSide.BUY,
     max_risk_percent=2.0
 )
 
 if validation['valid']:
     # Safe to place order
-    position = await client.trading.place_market_order("EURUSD", "BUY", 1.0)
+    position = await client.trading.place_market_order("EURUSD", TradeSide.BUY, 1.0)
 else:
     print("Trade rejected:", validation['warnings'])
 

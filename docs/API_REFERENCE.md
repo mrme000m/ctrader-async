@@ -82,12 +82,23 @@ Logout from the current trading account.
 await client.session.logout()
 ```
 
+### switch_account()
+
+Switch to a different trading account.
+
+```python
+# Note: For proper account switching, create a new client instance
+success = await client.session.switch_account(account_id: int)
+```
+
+**Returns:** bool - True if switch initiated successfully
+
 ### refresh_token()
 
 Refresh an expired OAuth access token via the protobuf API.
 
 ```python
-tokens = await client.session.refresh_token(refresh_token)
+tokens = await client.session.refresh_token(refresh_token: str)
 # Update client config with new token
 client.config.access_token = tokens['access_token']
 ```
@@ -285,10 +296,13 @@ for tick in ticks:
 Place a market order.
 
 ```python
+from ctc import TradeSide
+
 position = await client.trading.place_market_order(
     symbol: str,
-    side: str,  # "BUY" or "SELL"
+    side: TradeSide,  # TradeSide.BUY or TradeSide.SELL
     volume: float,
+    *,
     stop_loss: Optional[float] = None,
     take_profit: Optional[float] = None,
     label: Optional[str] = None,
@@ -303,11 +317,14 @@ position = await client.trading.place_market_order(
 Place a limit order.
 
 ```python
+from ctc import TradeSide, TimeInForce, OrderTriggerMethod
+
 order = await client.trading.place_limit_order(
     symbol: str,
-    side: str,
+    side: TradeSide,
     volume: float,
-    limit_price: float,
+    price: float,  # Note: parameter name is 'price', not 'limit_price'
+    *,
     stop_loss: Optional[float] = None,
     take_profit: Optional[float] = None,
     time_in_force: TimeInForce = TimeInForce.GOOD_TILL_CANCEL,
@@ -332,16 +349,26 @@ order = await client.trading.place_limit_order(
 Place a stop order.
 
 ```python
+from ctc import TradeSide, TimeInForce, OrderTriggerMethod
+
 order = await client.trading.place_stop_order(
     symbol: str,
-    side: str,
+    side: TradeSide,
     volume: float,
     stop_price: float,
+    *,
     stop_loss: Optional[float] = None,
     take_profit: Optional[float] = None,
     time_in_force: TimeInForce = TimeInForce.GOOD_TILL_CANCEL,
     expiration_timestamp: Optional[int] = None,
     # Advanced protection options same as limit orders
+    slippage_in_points: Optional[int] = None,
+    relative_stop_loss: Optional[int] = None,
+    relative_take_profit: Optional[int] = None,
+    guaranteed_stop_loss: Optional[bool] = None,
+    trailing_stop_loss: Optional[bool] = None,
+    stop_trigger_method: Optional[OrderTriggerMethod] = None,
+    position_id: Optional[int] = None
 )
 ```
 
@@ -352,15 +379,29 @@ order = await client.trading.place_stop_order(
 Place a stop-limit order.
 
 ```python
+from ctc import TradeSide, TimeInForce, OrderTriggerMethod
+
 order = await client.trading.place_stop_limit_order(
     symbol: str,
-    side: str,
+    side: TradeSide,
     volume: float,
     stop_price: float,
     limit_price: float,
+    *,
     stop_loss: Optional[float] = None,
     take_profit: Optional[float] = None,
-    # Other options same as limit orders
+    time_in_force: TimeInForce = TimeInForce.GOOD_TILL_CANCEL,
+    expiration_timestamp: Optional[int] = None,
+    comment: Optional[str] = None,
+    label: Optional[str] = None,
+    # Advanced protection options same as limit orders
+    slippage_in_points: Optional[int] = None,
+    relative_stop_loss: Optional[int] = None,
+    relative_take_profit: Optional[int] = None,
+    guaranteed_stop_loss: Optional[bool] = None,
+    trailing_stop_loss: Optional[bool] = None,
+    stop_trigger_method: Optional[OrderTriggerMethod] = None,
+    position_id: Optional[int] = None
 )
 ```
 
@@ -371,8 +412,190 @@ order = await client.trading.place_stop_limit_order(
 Modify position stop loss / take profit.
 
 ```python
+from ctc import OrderTriggerMethod
+
+await client.trading.modify_order(
+    order_id: int,
+    *,
+    volume: Optional[float] = None,
+    limit_price: Optional[float] = None,
+    stop_price: Optional[float] = None,
+    stop_loss: Optional[float] = None,
+    take_profit: Optional[float] = None,
+    expiration_timestamp: Optional[int] = None,
+    slippage_in_points: Optional[int] = None,
+    relative_stop_loss: Optional[int] = None,
+    relative_take_profit: Optional[int] = None,
+    guaranteed_stop_loss: Optional[bool] = None,
+    trailing_stop_loss: Optional[bool] = None,
+    stop_trigger_method: Optional[OrderTriggerMethod] = None
+)
+```
+
+### cancel_order()
+
+Cancel a pending order.
+
+```python
+await client.trading.cancel_order(order_id: int)
+```
+
+### get_positions()
+
+Get all open positions.
+
+```python
+positions = await client.trading.get_positions()
+```
+
+**Returns:** list[Position]
+
+### get_orders()
+
+Get all pending orders.
+
+```python
+orders = await client.trading.get_orders()
+```
+
+**Returns:** list[Order]
+
+### refresh_positions()
+
+Refresh positions from server.
+
+```python
+await client.trading.refresh_positions()
+```
+
+### refresh_orders()
+
+Refresh orders from server.
+
+```python
+await client.trading.refresh_orders()
+```
+
+### close_positions_bulk()
+
+Close multiple positions with bounded concurrency.
+
+```python
+await client.trading.close_positions_bulk(
+    position_ids: list[int],
+    *,
+    concurrency: int = 5
+)
+```
+
+### cancel_orders_bulk()
+
+Cancel multiple orders with bounded concurrency.
+
+```python
+await client.trading.cancel_orders_bulk(
+    order_ids: list[int],
+    *,
+    concurrency: int = 10
+)
+```
+
+### modify_orders_bulk()
+
+Modify multiple orders with bounded concurrency.
+
+```python
+await client.trading.modify_orders_bulk(
+    order_modifications: list[dict],
+    *,
+    concurrency: int = 10
+)
+```
+
+### modify_positions_bulk()
+
+Modify multiple positions with bounded concurrency.
+
+```python
+await client.trading.modify_positions_bulk(
+    position_modifications: list[dict],
+    *,
+    concurrency: int = 5
+)
+```
+
+### close_all_positions()
+
+Close all open positions.
+
+```python
+await client.trading.close_all_positions()
+```
+
+### cancel_all_orders()
+
+Cancel all pending orders.
+
+```python
+await client.trading.cancel_all_orders()
+```
+
+### get_orders_by_position()
+
+Get all orders associated with a specific position.
+
+```python
+orders = await client.trading.get_orders_by_position(position_id: int)
+```
+
+**Returns:** list[Order]
+
+### iter_deals_history()
+
+Iterate through deal history with pagination.
+
+```python
+async for deal in client.trading.iter_deals_history(
+    from_timestamp: Optional[int] = None,
+    to_timestamp: Optional[int] = None
+):
+    # Process deal
+    ...
+```
+
+### get_deals_history()
+
+Get deal history with optional filtering.
+
+```python
+deals = await client.trading.get_deals_history(
+    from_timestamp: Optional[int] = None,
+    to_timestamp: Optional[int] = None,
+    max_count: Optional[int] = None
+)
+```
+
+**Returns:** list[Deal]
+
+### list_all_orders()
+
+List all orders with optional filtering.
+
+```python
+orders = await client.trading.list_all_orders(
+    from_timestamp: Optional[int] = None,
+    to_timestamp: Optional[int] = None,
+    include_closed: bool = False
+)
+```
+
+**Returns:** list[Order]
+
+from ctc import OrderTriggerMethod
+
 await client.trading.modify_position(
     position_id: int,
+    *,
     stop_loss: Optional[float] = None,
     take_profit: Optional[float] = None,
     guaranteed_stop_loss: Optional[bool] = None,
@@ -388,6 +611,7 @@ Close a position (fully or partially).
 ```python
 await client.trading.close_position(
     position_id: int,
+    *,
     volume: Optional[float] = None  # None = close all
 )
 ```
@@ -536,10 +760,12 @@ await client.trading.cancel_all_orders()
 Calculate expected margin for a proposed trade.
 
 ```python
+from ctc import TradeSide
+
 margin_info = await client.risk.get_expected_margin(
     symbol: str,
     volume: float,
-    order_type: Optional[str] = None
+    order_type: Optional[TradeSide] = None
 )
 
 print(f"Required margin: {margin_info.formatted_margin}")
@@ -558,10 +784,12 @@ print(f"Sell margin: {margin_info.sell_margin}")
 Validate if a trade meets risk criteria.
 
 ```python
+from ctc import TradeSide
+
 validation = await client.risk.validate_trade_risk(
     symbol: str,
     volume: float,
-    side: str,
+    side: TradeSide,
     max_risk_percent: float = 2.0
 )
 

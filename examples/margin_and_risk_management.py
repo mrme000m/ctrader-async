@@ -42,7 +42,7 @@ async def calculate_margin_example():
         print("=== Margin Calculation Example ===\n")
         
         # Get account info
-        account = await client.account.get_account_info()
+        account = await client.account.get_info()
         print(f"Account Balance: {account.balance:.2f} {account.currency}")
         print(f"Equity: {account.equity:.2f}")
         print(f"Free Margin: {account.free_margin:.2f}")
@@ -91,7 +91,8 @@ async def risk_validation_example():
         # Proposed trade
         symbol = "EURUSD"
         volume = 1.0
-        side = "BUY"
+        from ctc import TradeSide
+        side = TradeSide.BUY
         max_risk_percent = 2.0  # Maximum 2% risk per trade
         
         print(f"Validating trade: {side} {volume} lots {symbol}")
