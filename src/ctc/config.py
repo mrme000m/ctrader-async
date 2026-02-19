@@ -36,6 +36,23 @@ class ClientConfig:
         reconnect_max_delay: Maximum reconnection delay (seconds)
         rate_limit_trading: Rate limit for trading requests (per second)
         rate_limit_historical: Rate limit for historical data (per second)
+        
+    BetterStack Integration (Optional):
+        betterstack_enabled: Enable BetterStack logging integration
+        betterstack_ingest_host: BetterStack log ingest host
+        betterstack_source_token: BetterStack source token
+        betterstack_log_level: Minimum log level for BetterStack
+        betterstack_heartbeat_url: Optional heartbeat URL for uptime monitoring
+        
+    Example:
+        >>> config = ClientConfig(
+        ...     client_id="your_id",
+        ...     client_secret="your_secret",
+        ...     access_token="your_token",
+        ...     account_id=12345,
+        ...     host_type="demo",
+        ...     betterstack_enabled=True  # Auto-detects from env vars
+        ... )
     """
     
     # Required settings
@@ -67,6 +84,15 @@ class ClientConfig:
     log_format: str = "plain"  # "plain" or "json"
     configure_logging: bool = False  # if True, client configures root logger
     
+    # BetterStack Integration (optional, opt-in)
+    betterstack_enabled: bool = False  # Enable BetterStack logging
+    betterstack_ingest_host: Optional[str] = None  # e.g., "in.logtail.com"
+    betterstack_source_token: Optional[str] = None  # Source token
+    betterstack_log_level: str = "INFO"  # Min level to send to BetterStack
+    betterstack_heartbeat_url: Optional[str] = None  # Uptime heartbeat URL
+    betterstack_service_name: str = "ctrader-client"  # Service identifier
+    betterstack_environment: str = "development"  # Environment name
+    
     # Advanced
     heartbeat_interval: float = 30.0  # Send heartbeat every N seconds
     message_max_size: int = 10 * 1024 * 1024  # 10MB max message size
@@ -89,6 +115,10 @@ class ClientConfig:
     # Streaming
     tick_queue_size: int = 1000  # per-stream tick buffer size
     
+    # WebSocket settings
+    websocket_ping_interval: float = 20.0
+    websocket_ping_timeout: float = 10.0
+    
     def __post_init__(self):
         """Validate configuration after initialization."""
         if self.host_type not in ("demo", "live"):
@@ -99,6 +129,15 @@ class ClientConfig:
         
         if self.connection_timeout <= 0:
             raise ValueError(f"connection_timeout must be positive, got: {self.connection_timeout}")
+        
+        # If betterstack_enabled is True but no config provided, try to load from env
+        if self.betterstack_enabled:
+            if not self.betterstack_ingest_host:
+                self.betterstack_ingest_host = os.getenv("BETTERSTACK_INGEST_HOST")
+            if not self.betterstack_source_token:
+                self.betterstack_source_token = os.getenv("BETTERSTACK_SOURCE_TOKEN")
+            if not self.betterstack_heartbeat_url:
+                self.betterstack_heartbeat_url = os.getenv("BETTERSTACK_UPTIME_HEARTBEAT_URL")
     
     @classmethod
     def from_env(cls, prefix: str = "CTRADER_") -> ClientConfig:
@@ -113,14 +152,32 @@ class ClientConfig:
         Example:
             >>> config = ClientConfig.from_env()
             >>> # Reads CTRADER_CLIENT_ID, CTRADER_CLIENT_SECRET, etc.
+            >>> # Also reads BETTERSTACK_INGEST_HOST, BETTERSTACK_SOURCE_TOKEN, etc.
         """
+        def _is_truthy(value: str | bool | None) -> bool:
+            if value is None:
+                return False
+            if isinstance(value, bool):
+                return value
+            return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "enabled"}
+        
         def get_env(key: str, default=None, cast=str):
             value = os.getenv(f"{prefix}{key}", default)
             if value is None:
                 return default
             if cast == bool:
-                return str(value).lower() in ("true", "1", "yes", "on")
+                return _is_truthy(value)
             return cast(value)
+        
+        def get_env_any(*keys: str, default=None, cast=str):
+            """Try multiple env var names, return first found."""
+            for key in keys:
+                value = os.getenv(key)
+                if value is not None:
+                    if cast == bool:
+                        return _is_truthy(value)
+                    return cast(value)
+            return default
         
         return cls(
             client_id=get_env("CLIENT_ID", ""),
@@ -152,6 +209,42 @@ class ClientConfig:
             token_auto_refresh_enabled=get_env("TOKEN_AUTO_REFRESH_ENABLED", False, bool),
             token_refresh_margin_seconds=get_env("TOKEN_REFRESH_MARGIN_SECONDS", 60.0, float),
             token_refresh_default_expires_in=get_env("TOKEN_REFRESH_DEFAULT_EXPIRES_IN", 3600, int),
+            websocket_ping_interval=get_env("WEBSOCKET_PING_INTERVAL", 20.0, float),
+            websocket_ping_timeout=get_env("WEBSOCKET_PING_TIMEOUT", 10.0, float),
+            # BetterStack configuration (reads from both CTRADER_ and BETTERSTACK_ prefixes)
+            betterstack_enabled=get_env_any(
+                f"{prefix}BETTERSTACK_ENABLED",
+                "BETTERSTACK_ENABLED",
+                default=False,
+                cast=bool
+            ),
+            betterstack_ingest_host=get_env_any(
+                f"{prefix}BETTERSTACK_INGEST_HOST",
+                "BETTERSTACK_INGEST_HOST"
+            ),
+            betterstack_source_token=get_env_any(
+                f"{prefix}BETTERSTACK_SOURCE_TOKEN",
+                "BETTERSTACK_SOURCE_TOKEN"
+            ),
+            betterstack_log_level=get_env_any(
+                f"{prefix}BETTERSTACK_LOG_LEVEL",
+                "BETTERSTACK_LOG_LEVEL",
+                default="INFO"
+            ),
+            betterstack_heartbeat_url=get_env_any(
+                f"{prefix}BETTERSTACK_HEARTBEAT_URL",
+                "BETTERSTACK_UPTIME_HEARTBEAT_URL"
+            ),
+            betterstack_service_name=get_env_any(
+                f"{prefix}BETTERSTACK_SERVICE_NAME",
+                "BETTERSTACK_SERVICE_NAME",
+                default="ctrader-client"
+            ),
+            betterstack_environment=get_env_any(
+                f"{prefix}BETTERSTACK_ENVIRONMENT",
+                "BETTERSTACK_ENVIRONMENT",
+                default="development"
+            ),
         )
     
     @classmethod
@@ -187,7 +280,55 @@ class ClientConfig:
         """
         path = Path(path)
         with open(path, "w") as f:
-            json.dump(self.__dict__, f, indent=2)
+            # Convert to dict and mask sensitive fields
+            data = self.to_dict(mask_sensitive=True)
+            json.dump(data, f, indent=2)
+    
+    def to_dict(self, mask_sensitive: bool = False) -> dict:
+        """Convert configuration to dictionary.
+        
+        Args:
+            mask_sensitive: If True, masks sensitive fields like tokens
+            
+        Returns:
+            Dictionary representation of the configuration
+        """
+        data = {
+            "client_id": self.client_id,
+            "client_secret": "***" if mask_sensitive else self.client_secret,
+            "access_token": "***" if mask_sensitive else self.access_token,
+            "account_id": self.account_id,
+            "host_type": self.host_type,
+            "connection_timeout": self.connection_timeout,
+            "request_timeout": self.request_timeout,
+            "auth_timeout": self.auth_timeout,
+            "use_tls": self.use_tls,
+            "reconnect_enabled": self.reconnect_enabled,
+            "reconnect_max_attempts": self.reconnect_max_attempts,
+            "log_level": self.log_level,
+            "log_format": self.log_format,
+            "betterstack_enabled": self.betterstack_enabled,
+            "betterstack_log_level": self.betterstack_log_level,
+            "betterstack_service_name": self.betterstack_service_name,
+            "betterstack_environment": self.betterstack_environment,
+        }
+        
+        # Include BetterStack config if not masking or if empty
+        if not mask_sensitive:
+            data["betterstack_ingest_host"] = self.betterstack_ingest_host
+            data["betterstack_heartbeat_url"] = self.betterstack_heartbeat_url
+        else:
+            data["betterstack_ingest_host"] = (
+                "***" if self.betterstack_ingest_host else None
+            )
+            data["betterstack_has_source_token"] = bool(
+                self.betterstack_source_token
+            )
+            data["betterstack_heartbeat_configured"] = bool(
+                self.betterstack_heartbeat_url
+            )
+        
+        return data
     
     def validate(self):
         """Validate that all required configuration is present.
@@ -211,6 +352,15 @@ class ClientConfig:
                 f"Missing required configuration: {', '.join(missing)}\n"
                 f"Provide via constructor, environment variables (CTRADER_*), or config file."
             )
+        
+        # Validate BetterStack config if enabled
+        if self.betterstack_enabled:
+            if not self.betterstack_ingest_host or not self.betterstack_source_token:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "BetterStack enabled but missing ingest_host or source_token. "
+                    "Set BETTERSTACK_INGEST_HOST and BETTERSTACK_SOURCE_TOKEN environment variables."
+                )
     
     @property
     def host(self) -> str:
@@ -223,3 +373,16 @@ class ClientConfig:
     def port(self) -> int:
         """Get the protobuf port (5035 for both demo and live)."""
         return 5035
+    
+    @property
+    def betterstack_configured(self) -> bool:
+        """Check if BetterStack is properly configured.
+        
+        Returns:
+            True if BetterStack is enabled and has required configuration
+        """
+        return (
+            self.betterstack_enabled and
+            bool(self.betterstack_ingest_host) and
+            bool(self.betterstack_source_token)
+        )

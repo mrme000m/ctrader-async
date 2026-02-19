@@ -46,6 +46,12 @@ docs = [
     "sphinx>=6.0.0",
     "sphinx-rtd-theme>=1.2.0",
 ]
+betterstack = [
+    "aiohttp>=3.8.0",
+]
+all = [
+    "aiohttp>=3.8.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/yourusername/ctrader-async"

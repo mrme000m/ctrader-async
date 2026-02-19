@@ -38,7 +38,21 @@ from .typed_events import (
 )
 from .metrics import MetricsCollector, MetricsSnapshot
 from .stream_registry import StreamRegistry
-from .debug import connection_debug_enabled
+from .debug import (
+    connection_debug_enabled,
+    debug_mode_enabled,
+    protocol_debug_enabled,
+    log_calls_enabled,
+    trace_exceptions_enabled,
+    set_debug_mode,
+    get_debug_status,
+    log_calls,
+    debug_context,
+    profile_block,
+    dump_object_state,
+    format_exception_info,
+    get_runtime_info,
+)
 
 __all__ = [
     # Errors
@@ -95,8 +109,20 @@ __all__ = [
     # Stream recovery
     "StreamRegistry",
 
-    # Debug flags
+    # Debug flags and utilities
     "connection_debug_enabled",
+    "debug_mode_enabled",
+    "protocol_debug_enabled",
+    "log_calls_enabled",
+    "trace_exceptions_enabled",
+    "set_debug_mode",
+    "get_debug_status",
+    "log_calls",
+    "debug_context",
+    "profile_block",
+    "dump_object_state",
+    "format_exception_info",
+    "get_runtime_info",
 ]
 
 

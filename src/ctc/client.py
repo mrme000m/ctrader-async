@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Optional
+from typing import Optional, Any
 
 from .config import ClientConfig
 from .transport import TCPTransport, get_host, PROTOBUF_PORT, WEBSOCKET_AVAILABLE
@@ -21,11 +21,18 @@ from .utils.reconnect import ReconnectManager, ReconnectConfig
 from .utils.metrics import MetricsCollector
 from .utils.stream_registry import StreamRegistry
 from .utils.tick_store import TickStore
-from .utils.logging import setup_logging
+from .utils.logging import setup_logging, create_structured_logger
 
 logger = logging.getLogger(__name__)
 
 from .utils.debug import connection_debug_enabled
+
+# Optional BetterStack integration
+try:
+    from .integrations import BetterStackHandler, betterstack_enabled
+except ImportError:
+    BetterStackHandler = None  # type: ignore
+    betterstack_enabled = lambda: False  # type: ignore
 
 
 class CTraderClient:
@@ -154,6 +161,10 @@ class CTraderClient:
         self._auto_model_bridge = bool(auto_model_bridge)
         self._auto_cache_updater = bool(auto_cache_updater)
         
+        # BetterStack integration (optional, opt-in)
+        self._betterstack: Optional[Any] = None
+        self._betterstack_enabled = False
+        
         # High-level APIs (initialized after connection)
         self.trading: Optional[TradingAPI] = None
         self.market_data: Optional[MarketDataAPI] = None
@@ -169,8 +180,17 @@ class CTraderClient:
         self._authenticated = False
         self._message_task: Optional[asyncio.Task] = None
         
+        # Setup logging (with optional BetterStack)
         if getattr(self.config, "configure_logging", False):
-            setup_logging(self.config.log_level, log_format=self.config.log_format)
+            setup_logging(
+                self.config.log_level,
+                log_format=self.config.log_format,
+                betterstack=self.config.betterstack_enabled
+            )
+        
+        # Initialize BetterStack if enabled in config
+        if self.config.betterstack_enabled and BetterStackHandler is not None:
+            self._init_betterstack()
     
     @classmethod
     def from_config(cls, config: ClientConfig, **kwargs) -> CTraderClient:
@@ -215,6 +235,65 @@ class CTraderClient:
         """
         config = ClientConfig.from_env(prefix)
         return cls.from_config(config)
+    
+    def _init_betterstack(self) -> None:
+        """Initialize BetterStack integration.
+        
+        This method sets up BetterStack logging if configured.
+        It's called automatically during initialization if
+        betterstack_enabled is True in the configuration.
+        """
+        if BetterStackHandler is None:
+            logger.debug("BetterStack integration not available")
+            return
+        
+        if not self.config.betterstack_configured:
+            logger.debug(
+                "BetterStack not fully configured (missing ingest_host or source_token)"
+            )
+            return
+        
+        try:
+            from .integrations import BetterStackConfig
+            
+            bs_config = BetterStackConfig(
+                ingest_host=self.config.betterstack_ingest_host,
+                source_token=self.config.betterstack_source_token,
+                heartbeat_url=self.config.betterstack_heartbeat_url,
+                log_level=self.config.betterstack_log_level,
+                service_name=self.config.betterstack_service_name,
+                service_version=getattr(self, "__version__", "unknown"),
+                environment=self.config.betterstack_environment,
+            )
+            
+            self._betterstack = BetterStackHandler(bs_config)
+            self._betterstack_enabled = True
+            
+            logger.info(
+                f"BetterStack integration enabled for {bs_config.service_name} "
+                f"in {bs_config.environment} environment"
+            )
+            
+        except Exception as e:
+            logger.warning(f"Failed to initialize BetterStack: {e}")
+            self._betterstack_enabled = False
+            self._betterstack = None
+    
+    async def _send_betterstack_log(self, event: dict[str, Any]) -> None:
+        """Send a log event to BetterStack if enabled."""
+        if self._betterstack_enabled and self._betterstack:
+            try:
+                await self._betterstack.send_log(event)
+            except Exception:
+                pass  # Fail silently to not disrupt main flow
+    
+    async def _send_betterstack_heartbeat(self) -> None:
+        """Send a heartbeat to BetterStack if enabled."""
+        if self._betterstack_enabled and self._betterstack:
+            try:
+                await self._betterstack.send_heartbeat()
+            except Exception:
+                pass  # Fail silently
     
     async def connect(self):
         """Connect to cTrader server and authenticate.
@@ -375,10 +454,35 @@ class CTraderClient:
 
             self._start_background_tasks()
 
+            # Send success log to BetterStack
+            if self._betterstack_enabled:
+                await self._send_betterstack_log({
+                    "message": f"cTrader client connected successfully",
+                    "level": "info",
+                    "event": "client.connected",
+                    "account_id": self.config.account_id,
+                    "host_type": self.config.host_type,
+                    "transport": transport_type,
+                    "symbols_loaded": len(self.symbols._symbols_by_name) if self.symbols else 0,
+                })
+                # Send heartbeat if configured
+                await self._send_betterstack_heartbeat()
+
             logger.info("Client ready")
         
         except Exception as e:
             logger.error(f"Connection failed: {e}", exc_info=True)
+            # Send error to BetterStack
+            if self._betterstack_enabled:
+                await self._send_betterstack_log({
+                    "message": f"cTrader client connection failed: {e}",
+                    "level": "error",
+                    "event": "client.connection_failed",
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                    "account_id": self.config.account_id,
+                    "host_type": self.config.host_type,
+                })
             await self.disconnect()
             raise
     
@@ -804,8 +908,28 @@ class CTraderClient:
 
         try:
             await self._reconnect_manager.connect_with_retry(_attempt, should_retry=_should_retry)
+            # Send reconnect success to BetterStack
+            if self._betterstack_enabled:
+                await self._send_betterstack_log({
+                    "message": "cTrader client reconnected successfully",
+                    "level": "info",
+                    "event": "client.reconnected",
+                    "account_id": self.config.account_id,
+                    "host_type": self.config.host_type,
+                })
         except AuthenticationError as e:
             logger.error(f"Reconnect failed fatally (authentication): {e}")
+            # Send fatal reconnect failure to BetterStack
+            if self._betterstack_enabled:
+                await self._send_betterstack_log({
+                    "message": f"cTrader client reconnect failed fatally: {e}",
+                    "level": "error",
+                    "event": "client.reconnect_fatal",
+                    "error_type": "AuthenticationError",
+                    "error_message": str(e),
+                    "account_id": self.config.account_id,
+                    "host_type": self.config.host_type,
+                })
             # Surface a terminal reconnect failure event.
             try:
                 await self.events.emit("client.reconnect.fatal", {"error": e})
@@ -845,6 +969,19 @@ class CTraderClient:
                 pass
         self._token_refresh_task = None
 
+        # Send disconnect log to BetterStack before cleanup
+        if self._betterstack_enabled and self._connected:
+            try:
+                await self._send_betterstack_log({
+                    "message": "cTrader client disconnecting",
+                    "level": "info",
+                    "event": "client.disconnecting",
+                    "account_id": self.config.account_id,
+                    "host_type": self.config.host_type,
+                })
+            except Exception:
+                pass
+        
         self._closing = True
 
         self._authenticated = False
@@ -863,6 +1000,15 @@ class CTraderClient:
                 await self._transport.close()
             except Exception as e:
                 logger.debug(f"Error closing transport: {e}")
+        
+        # Shutdown BetterStack handler
+        if self._betterstack:
+            try:
+                await self._betterstack.shutdown()
+            except Exception:
+                pass
+            self._betterstack = None
+            self._betterstack_enabled = False
         
         # Clear APIs
         self.trading = None

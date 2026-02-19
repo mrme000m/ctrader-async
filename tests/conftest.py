@@ -26,6 +26,34 @@ def _load_dotenv_if_present() -> None:
 
 _load_dotenv_if_present()
 
+# ---------------------------------------------------------------------------
+# Module-level skip for all integration test files
+# ---------------------------------------------------------------------------
+# Any test file whose name matches test_integration*.py is skipped wholesale
+# unless CTRADER_RUN_INTEGRATION=true.  This prevents the 90-second timeouts
+# in tests like TestCandleStream from blocking the unit-test run.
+
+_INTEGRATION_ENABLED = os.getenv("CTRADER_RUN_INTEGRATION", "").lower() in (
+    "1", "true", "yes", "on"
+)
+
+_INTEGRATION_FILES = {
+    "test_integration.py",
+    "test_integration_new_features.py",
+    "test_integration_risk_api.py",
+    "test_integration_history_api.py",
+    "test_integration_market_data_extended.py",
+    "test_integration_session_assets.py",
+    "test_integration_events_bus.py",
+}
+
+
+def pytest_ignore_collect(collection_path, config):
+    """Ignore integration test files when CTRADER_RUN_INTEGRATION is not set."""
+    if not _INTEGRATION_ENABLED and Path(collection_path).name in _INTEGRATION_FILES:
+        return True
+    return None
+
 
 @pytest_asyncio.fixture
 async def client():

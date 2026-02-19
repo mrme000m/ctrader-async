@@ -96,7 +96,27 @@ from .utils import (
     TradingStateCacheUpdater,
     MetricsCollector,
     MetricsSnapshot,
+    # Debug utilities
+    debug_mode_enabled,
+    connection_debug_enabled,
+    set_debug_mode,
+    get_debug_status,
+    log_calls,
 )
+
+# Optional integrations (only available if dependencies installed)
+try:
+    from .integrations import (
+        BetterStackHandler,
+        BetterStackConfig,
+        setup_betterstack_logging,
+        betterstack_enabled,
+    )
+except ImportError:
+    BetterStackHandler = None  # type: ignore
+    BetterStackConfig = None  # type: ignore
+    setup_betterstack_logging = None  # type: ignore
+    betterstack_enabled = lambda: False  # type: ignore
 
 __all__ = [
     # Version info
@@ -166,4 +186,17 @@ __all__ = [
     "TradingStateCacheUpdater",
     "MetricsCollector",
     "MetricsSnapshot",
+    
+    # Debug utilities
+    "debug_mode_enabled",
+    "connection_debug_enabled",
+    "set_debug_mode",
+    "get_debug_status",
+    "log_calls",
+    
+    # BetterStack integration (optional)
+    "BetterStackHandler",
+    "BetterStackConfig",
+    "setup_betterstack_logging",
+    "betterstack_enabled",
 ]

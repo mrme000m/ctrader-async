@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import types
 import pytest
 
@@ -8,7 +9,11 @@ from ctc.client import CTraderClient
 
 @pytest.mark.asyncio
 async def test_client_auto_enables_bridges(monkeypatch):
-    # Patch connect internals to avoid real networking; we only validate the auto-enable logic
+    """
+    Verify that auto_model_bridge=True and auto_cache_updater=True cause both
+    subsystems to be enabled after connect().  All network/server interactions
+    are replaced with no-op fakes so no real connection is attempted.
+    """
     c = CTraderClient(
         client_id="x",
         client_secret="y",
@@ -19,7 +24,9 @@ async def test_client_auto_enables_bridges(monkeypatch):
         auto_cache_updater=True,
     )
 
-    # Patch TCPTransport construction to return a fake transport with async connect
+    # ------------------------------------------------------------------
+    # Fake TCP transport — no real socket
+    # ------------------------------------------------------------------
     class _FakeTCP:
         def __init__(self, *a, **k):
             self._connected = True
@@ -35,22 +42,39 @@ async def test_client_auto_enables_bridges(monkeypatch):
 
     monkeypatch.setattr("ctc.client.TCPTransport", _FakeTCP)
 
+    # ------------------------------------------------------------------
+    # Fake ProtocolHandler — satisfies every call made during connect()
+    # ------------------------------------------------------------------
     class _FakeProtocol:
-        def __init__(self):
-            self.dispatcher = types.SimpleNamespace(register_default=lambda *a, **k: None, register=lambda *a, **k: None)
+        def __init__(self, *a, **k):
+            self.dispatcher = types.SimpleNamespace(
+                register_default=lambda *a, **k: None,
+                register=lambda *a, **k: None,
+                unregister=lambda *a, **k: None,
+            )
+            self.hooks = types.SimpleNamespace(
+                register=lambda *a, **k: None,
+            )
+            self.events = types.SimpleNamespace(
+                on=lambda *a, **k: None,
+                off=lambda *a, **k: None,
+                emit=_async_noop,
+            )
 
         async def start(self):
             return
 
-    c._protocol = _FakeProtocol()
+        async def send_request(self, *a, **k):
+            return None
 
-    # Monkeypatch network/auth/symbol load steps to no-op
-    monkeypatch.setattr("ctc.client.get_host", lambda *_: "localhost")
-
-    async def _noop(*args, **kwargs):
+    async def _async_noop(*a, **k):
         return
 
-    # authenticator
+    monkeypatch.setattr("ctc.client.ProtocolHandler", _FakeProtocol)
+
+    # ------------------------------------------------------------------
+    # Fake authenticator
+    # ------------------------------------------------------------------
     class _FakeAuth:
         def __init__(self, *a, **k):
             pass
@@ -60,7 +84,9 @@ async def test_client_auto_enables_bridges(monkeypatch):
 
     monkeypatch.setattr("ctc.client.Authenticator", _FakeAuth)
 
-    # symbol catalog
+    # ------------------------------------------------------------------
+    # Fake symbol catalog
+    # ------------------------------------------------------------------
     class _FakeSymbols:
         def __init__(self, *a, **k):
             self._symbols_by_name = {"EURUSD": object()}
@@ -70,10 +96,23 @@ async def test_client_auto_enables_bridges(monkeypatch):
 
     monkeypatch.setattr("ctc.client.SymbolCatalog", _FakeSymbols)
 
-    # APIs
+    # ------------------------------------------------------------------
+    # Fake asset catalog — satisfies assets.load() call in connect()
+    # ------------------------------------------------------------------
+    class _FakeAssets:
+        def __init__(self, *a, **k):
+            pass
+
+        async def load(self):
+            return
+
+    monkeypatch.setattr("ctc.client.AssetCatalog", _FakeAssets)
+
+    # ------------------------------------------------------------------
+    # Fake trading / market / account APIs
+    # ------------------------------------------------------------------
     class _FakeTrading:
         def __init__(self, *a, **k):
-            import asyncio
             self._orders = []
             self._positions = []
             self._orders_lock = asyncio.Lock()
@@ -91,13 +130,14 @@ async def test_client_auto_enables_bridges(monkeypatch):
     monkeypatch.setattr("ctc.client.MarketDataAPI", _FakeMarket)
     monkeypatch.setattr("ctc.client.AccountAPI", _FakeAccount)
 
-    # Patch ProtocolHandler construction to reuse existing protocol
-    monkeypatch.setattr("ctc.client.ProtocolHandler", lambda *_a, **_k: c._protocol)
+    # ------------------------------------------------------------------
+    # Misc patches
+    # ------------------------------------------------------------------
+    monkeypatch.setattr("ctc.client.get_host", lambda *_: "localhost")
 
     await c.connect()
 
     assert c.model_bridge is not None
     assert c.state_cache_updater is not None
-    # both should be enabled
     assert c.model_bridge._enabled is True
     assert c.state_cache_updater._enabled is True

@@ -55,3 +55,4 @@ Thumbs.db
 # Logs
 *.log
 tradingview-webhooks-ctc-bot
+Audit*
