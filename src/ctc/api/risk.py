@@ -5,15 +5,18 @@ Provides methods for:
 - Pre-trade margin calculations
 - Position PnL details
 - Margin call monitoring
+- Dynamic leverage queries
 - Risk management utilities
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Callable
+from dataclasses import dataclass
+from datetime import datetime, timezone
 
-from ..models import MarginInfo, PositionPnL, MarginCall
+from ..models import MarginInfo, PositionPnL, PositionPnLRealtime, MarginCall
 
 if TYPE_CHECKING:
     from ..protocol import ProtocolHandler
@@ -21,6 +24,84 @@ if TYPE_CHECKING:
     from ..api.symbols import SymbolCatalog
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class LeverageTier:
+    """Dynamic leverage tier information.
+    
+    Represents a tier in a broker's dynamic leverage schedule.
+    Higher volumes typically result in lower leverage (higher margin requirements).
+    
+    Attributes:
+        tier_id: Tier identifier
+        volume_from: Starting volume for this tier (in lots or units)
+        volume_to: Ending volume for this tier (None = unlimited)
+        leverage: Leverage for this tier (e.g., 100.0 for 1:100)
+        margin_percent: Required margin percentage (e.g., 1.0 for 1%)
+    """
+    tier_id: int
+    volume_from: float
+    volume_to: Optional[float]
+    leverage: float
+    
+    @property
+    def margin_percent(self) -> float:
+        """Calculate margin percentage from leverage."""
+        return 100.0 / self.leverage if self.leverage > 0 else 0.0
+    
+    def __repr__(self) -> str:
+        vol_to = f"{self.volume_to:.2f}" if self.volume_to else "∞"
+        return (
+            f"<LeverageTier {self.tier_id}: "
+            f"{self.volume_from:.2f}-{vol_to} @ 1:{self.leverage:.0f}>"
+        )
+
+
+@dataclass
+class DynamicLeverage:
+    """Dynamic leverage information for a symbol.
+    
+    Contains the tiered leverage schedule that applies to a symbol.
+    
+    Attributes:
+        symbol_id: Symbol identifier
+        symbol_name: Symbol name
+        tiers: List of leverage tiers (ordered by volume)
+        total_volume: Total open volume for margin calculation
+    """
+    symbol_id: int
+    symbol_name: Optional[str]
+    tiers: list[LeverageTier]
+    total_volume: float = 0.0
+    
+    def get_leverage_for_volume(self, volume: float) -> float:
+        """Get the applicable leverage for a given volume.
+        
+        Args:
+            volume: Trade volume in lots
+            
+        Returns:
+            Leverage value (e.g., 100.0 for 1:100)
+        """
+        for tier in self.tiers:
+            if tier.volume_to is None or volume <= tier.volume_to:
+                return tier.leverage
+        # If volume exceeds all tiers, use the last tier's leverage
+        return self.tiers[-1].leverage if self.tiers else 100.0
+    
+    def calculate_margin(self, volume: float, notional_value: float) -> float:
+        """Calculate margin required for a given volume.
+        
+        Args:
+            volume: Trade volume in lots
+            notional_value: Notional value of the position in base currency
+            
+        Returns:
+            Required margin in account currency
+        """
+        leverage = self.get_leverage_for_volume(volume)
+        return notional_value / leverage if leverage > 0 else 0.0
 
 
 class RiskAPI:
@@ -56,6 +137,8 @@ class RiskAPI:
         self.config = config
         self.symbols = symbols
         self._client = client
+        self._margin_event_handlers: list[Callable] = []
+        self._margin_call_handlers: list[Callable] = []
     
     async def get_expected_margin(
         self,
@@ -191,6 +274,67 @@ class RiskAPI:
             timestamp=int(time.time() * 1000)
         )
     
+    async def get_position_pnl_realtime(self, position_id: int) -> Optional[PositionPnLRealtime]:
+        """Get real-time unrealized PnL for a position from server.
+        
+        This fetches server-calculated unrealized PnL which is more accurate
+        than client-side calculations as it uses the broker's exact pricing.
+        
+        Args:
+            position_id: Position identifier
+            
+        Returns:
+            PositionPnLRealtime with server-calculated PnL, or None if position not found
+            
+        Example:
+            >>> pnl = await client.risk.get_position_pnl_realtime(123456)
+            >>> print(f"Server Gross PnL: {pnl.formatted_gross_pnl}")
+            >>> print(f"Server Net PnL: {pnl.formatted_net_pnl}")
+        """
+        from ..messages.OpenApiMessages_pb2 import (
+            ProtoOAGetPositionUnrealizedPnLReq,
+            ProtoOAGetPositionUnrealizedPnLRes,
+        )
+        
+        # Build request
+        req = ProtoOAGetPositionUnrealizedPnLReq()
+        req.ctidTraderAccountId = self.config.account_id
+        req.positionId = position_id
+        
+        # Send request
+        response = await self.protocol.send_request(
+            req,
+            timeout=self.config.request_timeout,
+            request_type="PositionUnrealizedPnL"
+        )
+        
+        if not isinstance(response, ProtoOAGetPositionUnrealizedPnLRes):
+            raise ValueError(f"Unexpected response type: {type(response)}")
+        
+        # Check if position exists
+        if hasattr(response, 'positionId') and response.positionId != position_id:
+            return None
+        
+        # Parse response
+        money_digits = getattr(response, 'moneyDigits', 2)
+        divisor = 10 ** money_digits
+        
+        gross_pnl = getattr(response, 'grossUnrealizedPnL', 0) / divisor
+        net_pnl = getattr(response, 'netUnrealizedPnL', 0) / divisor
+        swap = getattr(response, 'swap', 0) / divisor
+        commission = getattr(response, 'commission', 0) / divisor
+        timestamp = getattr(response, 'timestamp', None)
+        
+        return PositionPnLRealtime(
+            position_id=position_id,
+            gross_unrealized_pnl=gross_pnl,
+            net_unrealized_pnl=net_pnl,
+            swap=swap,
+            commission=commission,
+            timestamp=timestamp,
+            money_digits=money_digits
+        )
+    
     async def get_margin_calls(self) -> list[MarginCall]:
         """Get list of margin calls for the account.
         
@@ -251,43 +395,260 @@ class RiskAPI:
         
         return margin_calls
     
-    def subscribe_margin_events(self, callback):
-        """Subscribe to margin change events.
+    async def get_dynamic_leverage(self, symbol: str) -> Optional[DynamicLeverage]:
+        """Get dynamic leverage tiers for a symbol.
         
-        Register a callback to be notified when position margin changes.
+        Dynamic leverage allows brokers to offer different leverage levels
+        based on position size. Higher volumes typically have lower leverage.
         
         Args:
-            callback: Function called with (position_id, used_margin, money_digits)
+            symbol: Symbol name (e.g., "EURUSD")
+            
+        Returns:
+            DynamicLeverage with tier information, or None if not available
             
         Example:
-            >>> def on_margin_change(position_id, used_margin, money_digits):
-            ...     print(f"Position {position_id} margin: {used_margin}")
+            >>> leverage_info = await client.risk.get_dynamic_leverage("EURUSD")
+            >>> for tier in leverage_info.tiers:
+            ...     print(f"Volume {tier.volume_from}-{tier.volume_to}: 1:{tier.leverage}")
             >>> 
-            >>> client.risk.subscribe_margin_events(on_margin_change)
+            >>> # Get leverage for specific volume
+            >>> lev = leverage_info.get_leverage_for_volume(5.0)
+            >>> print(f"Leverage for 5 lots: 1:{lev}")
         """
-        from ..messages.OpenApiMessages_pb2 import ProtoOAMarginChangedEvent
+        from ..messages.OpenApiMessages_pb2 import (
+            ProtoOAGetDynamicLeverageByIDReq,
+            ProtoOAGetDynamicLeverageByIDRes,
+        )
         
-        def handler(event):
-            if not isinstance(event, ProtoOAMarginChangedEvent):
-                return
+        # Get symbol info
+        symbol_info = await self.symbols.get_symbol(symbol)
+        if not symbol_info:
+            raise ValueError(f"Symbol not found: {symbol}")
+        
+        # Build request
+        req = ProtoOAGetDynamicLeverageByIDReq()
+        req.ctidTraderAccountId = self.config.account_id
+        req.symbolId = symbol_info.id
+        
+        # Send request
+        response = await self.protocol.send_request(
+            req,
+            timeout=self.config.request_timeout,
+            request_type="DynamicLeverage"
+        )
+        
+        if not isinstance(response, ProtoOAGetDynamicLeverageByIDRes):
+            raise ValueError(f"Unexpected response type: {type(response)}")
+        
+        # Check if dynamic leverage data exists
+        if not hasattr(response, 'dynamicLeverage') or not response.dynamicLeverage:
+            return None
+        
+        # Parse tiers
+        tiers = []
+        for i, tier_data in enumerate(response.dynamicLeverage):
+            volume_from = getattr(tier_data, 'volumeFrom', 0) / 100.0  # Convert from cents
+            volume_to_raw = getattr(tier_data, 'volumeTo', None)
+            volume_to = volume_to_raw / 100.0 if volume_to_raw else None
+            leverage = getattr(tier_data, 'leverage', 100) / 100.0  # Convert from cents
             
-            if hasattr(event, 'ctidTraderAccountId') and \
-               event.ctidTraderAccountId != self.config.account_id:
-                return
-            
-            position_id = getattr(event, 'positionId', None)
-            used_margin_raw = getattr(event, 'usedMargin', None)
-            money_digits = getattr(event, 'moneyDigits', 2)
-            
-            if position_id is not None and used_margin_raw is not None:
-                used_margin = used_margin_raw / (10 ** money_digits)
+            tiers.append(LeverageTier(
+                tier_id=i + 1,
+                volume_from=volume_from,
+                volume_to=volume_to,
+                leverage=leverage
+            ))
+        
+        # Get total volume if available
+        total_volume = 0.0
+        if hasattr(response, 'totalVolume'):
+            total_volume = response.totalVolume / 100.0
+        
+        return DynamicLeverage(
+            symbol_id=symbol_info.id,
+            symbol_name=symbol,
+            tiers=tiers,
+            total_volume=total_volume
+        )
+    
+    async def update_margin_call(
+        self,
+        margin_call_type: str,
+        margin_level_threshold: float,
+    ) -> None:
+        """Update a margin call threshold for the account.
+
+        Uses ``ProtoOAMarginCallUpdateReq`` to set the margin level at which
+        a margin call warning or stop-out is triggered. This allows customising
+        the broker's margin call behaviour programmatically.
+
+        Args:
+            margin_call_type: Type string as defined by the broker, e.g.
+                ``"MARGIN_CALL"``, ``"STOP_OUT"``, ``"MARGIN_CALL_2"``
+            margin_level_threshold: Margin level (%) at which the event fires,
+                e.g. ``100.0`` for 100%
+
+        Raises:
+            ValueError: If the response is unexpected
+            TradingError: If the server rejects the update
+
+        Example:
+            >>> # Set margin call warning at 120%
+            >>> await client.risk.update_margin_call("MARGIN_CALL", 120.0)
+            >>> # Set stop-out at 50%
+            >>> await client.risk.update_margin_call("STOP_OUT", 50.0)
+        """
+        from ..messages.OpenApiMessages_pb2 import (
+            ProtoOAMarginCallUpdateReq,
+            ProtoOAMarginCallUpdateRes,
+        )
+        from ..messages.OpenApiModelMessages_pb2 import ProtoOAMarginCall
+
+        mc = ProtoOAMarginCall()
+        mc.marginCallType = margin_call_type
+        mc.marginLevelThreshold = float(margin_level_threshold)
+
+        req = ProtoOAMarginCallUpdateReq()
+        req.ctidTraderAccountId = self.config.account_id
+        req.marginCall.CopyFrom(mc)
+
+        response = await self.protocol.send_request(
+            req,
+            timeout=self.config.request_timeout,
+            request_type="MarginCallUpdate",
+        )
+
+        if not isinstance(response, ProtoOAMarginCallUpdateRes):
+            raise ValueError(f"Unexpected response type: {type(response)}")
+
+        logger.info(
+            f"Margin call updated: type={margin_call_type}, "
+            f"threshold={margin_level_threshold}%"
+        )
+
+    def subscribe_margin_events(
+        self,
+        callback: Callable[[int, float, int], None],
+    ) -> Callable[[], None]:
+        """Subscribe to margin change events.
+
+        Registers *callback* on the client event bus so it is called whenever
+        a ``ProtoOAMarginChangedEvent`` arrives from the server.
+
+        Args:
+            callback: Callable invoked as ``callback(position_id, used_margin, money_digits)``.
+
+        Returns:
+            An *unsubscribe* callable — call it with no arguments to stop
+            receiving events::
+
+                unsub = client.risk.subscribe_margin_events(my_handler)
+                # later …
+                unsub()
+
+        Example:
+            >>> def on_margin_change(position_id, used_margin, money_digits):
+            ...     print(f"Position {position_id} margin: {used_margin:.2f}")
+            >>>
+            >>> unsub = client.risk.subscribe_margin_events(on_margin_change)
+        """
+        if self._client is None:
+            raise RuntimeError("Risk API not attached to client — cannot subscribe to events")
+
+        async def _handler(data: dict) -> None:
+            position_id = data.get("position_id")
+            used_margin = data.get("used_margin", 0.0)
+            money_digits = data.get("money_digits", 2)
+            if position_id is not None:
                 try:
                     callback(position_id, used_margin, money_digits)
                 except Exception as e:
                     logger.error(f"Error in margin event callback: {e}", exc_info=True)
-        
-        self.protocol.add_handler(ProtoOAMarginChangedEvent, handler)
+
+        self._client.events.on("risk.margin_changed", _handler)
+        self._margin_event_handlers.append(_handler)
+
+        def _unsubscribe() -> None:
+            self._client.events.off("risk.margin_changed", _handler)
+            try:
+                self._margin_event_handlers.remove(_handler)
+            except ValueError:
+                pass
+
         logger.info("Subscribed to margin change events")
+        return _unsubscribe
+
+    def subscribe_margin_call_events(
+        self,
+        callback: Callable[[str, float, float, float], None],
+    ) -> Callable[[], None]:
+        """Subscribe to margin call and stop-out events.
+
+        Registers *callback* on the client event bus for both
+        ``ProtoOAMarginCallUpdateEvent`` (threshold crossed) and
+        ``ProtoOAMarginCallTriggerEvent`` (stop-out fired).
+
+        Args:
+            callback: Callable invoked as
+                ``callback(event_type, equity, margin, margin_level)`` where
+                *event_type* is ``"MARGIN_CALL_UPDATE"`` or ``"MARGIN_CALL_TRIGGER"``.
+
+        Returns:
+            An *unsubscribe* callable — call it with no arguments to stop
+            receiving events::
+
+                unsub = client.risk.subscribe_margin_call_events(my_handler)
+                # later …
+                unsub()
+
+        Example:
+            >>> def on_margin_call(event_type, equity, margin, margin_level):
+            ...     print(f"{event_type}: Margin Level = {margin_level:.2f}%")
+            ...     if event_type == "MARGIN_CALL_TRIGGER":
+            ...         print("CRITICAL: Positions may be liquidated!")
+            >>>
+            >>> unsub = client.risk.subscribe_margin_call_events(on_margin_call)
+        """
+        if self._client is None:
+            raise RuntimeError("Risk API not attached to client — cannot subscribe to events")
+
+        async def _update_handler(data: dict) -> None:
+            try:
+                callback(
+                    data.get("event_type", "MARGIN_CALL_UPDATE"),
+                    data.get("equity", 0.0),
+                    data.get("margin", 0.0),
+                    data.get("margin_level", 0.0),
+                )
+            except Exception as e:
+                logger.error(f"Error in margin call update callback: {e}", exc_info=True)
+
+        async def _trigger_handler(data: dict) -> None:
+            try:
+                callback(
+                    data.get("event_type", "MARGIN_CALL_TRIGGER"),
+                    data.get("equity", 0.0),
+                    data.get("margin", 0.0),
+                    data.get("margin_level", 0.0),
+                )
+            except Exception as e:
+                logger.error(f"Error in margin call trigger callback: {e}", exc_info=True)
+
+        self._client.events.on("risk.margin_call_update", _update_handler)
+        self._client.events.on("risk.margin_call_trigger", _trigger_handler)
+        self._margin_call_handlers.append((_update_handler, _trigger_handler))
+
+        def _unsubscribe() -> None:
+            self._client.events.off("risk.margin_call_update", _update_handler)
+            self._client.events.off("risk.margin_call_trigger", _trigger_handler)
+            try:
+                self._margin_call_handlers.remove((_update_handler, _trigger_handler))
+            except ValueError:
+                pass
+
+        logger.info("Subscribed to margin call events")
+        return _unsubscribe
     
     async def validate_trade_risk(
         self,
@@ -351,7 +712,7 @@ class RiskAPI:
             }
         
         # Get account info
-        account = await self._client.account.get_account_info()
+        account = await self._client.account.get_full_account_info()
         margin_available = account.free_margin
         equity = account.equity
         

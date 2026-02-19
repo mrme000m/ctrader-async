@@ -30,6 +30,9 @@ class DefaultAssetConverter(AssetConverter):
     Notes:
     - Requires symbols to expose base_asset_id / quote_asset_id.
     - Requires last ticks for the chosen symbols in TickStore.
+    - The symbol-pair lookup cache is built lazily on the first conversion call
+      and invalidated whenever ``invalidate_cache()`` is called (e.g. after a
+      ``market.symbol_changed`` event).
     """
 
     def __init__(
@@ -44,24 +47,40 @@ class DefaultAssetConverter(AssetConverter):
         self.assets = assets
         self.ticks = ticks
         self.bridge_asset = bridge_asset.upper()
+        # Cache: (base_asset_name_upper, quote_asset_name_upper) -> symbol_name
+        self._pair_cache: Optional[dict] = None
 
-    async def _asset_name(self, asset_id: int | None) -> Optional[str]:
-        if not asset_id:
-            return None
-        a = await self.assets.get_asset_by_id(int(asset_id))
-        return a.name.upper() if a else None
+    def invalidate_cache(self) -> None:
+        """Invalidate the symbol-pair lookup cache.
+
+        Call this after a ``market.symbol_changed`` event so the next
+        conversion rebuilds the index from the refreshed symbol catalog.
+        """
+        self._pair_cache = None
+
+    async def _ensure_cache(self) -> dict:
+        """Build (or return cached) mapping of (base, quote) -> symbol_name."""
+        if self._pair_cache is not None:
+            return self._pair_cache
+
+        cache: dict = {}
+        all_syms = await self.symbols.get_all()
+        for s in all_syms:
+            if not s.base_asset_id or not s.quote_asset_id:
+                continue
+            base_asset = await self.assets.get_asset_by_id(int(s.base_asset_id))
+            quote_asset = await self.assets.get_asset_by_id(int(s.quote_asset_id))
+            if base_asset and quote_asset:
+                key = (base_asset.name.upper(), quote_asset.name.upper())
+                # Only store first match (symbol catalog may have duplicates)
+                if key not in cache:
+                    cache[key] = s.name
+        self._pair_cache = cache
+        return cache
 
     async def _find_symbol_for_pair(self, base: str, quote: str) -> Optional[str]:
-        # Scan loaded symbols (catalog caches; load() already called by client typically)
-        all_syms = await self.symbols.get_all()
-        base_u = base.upper()
-        quote_u = quote.upper()
-        for s in all_syms:
-            b = await self._asset_name(s.base_asset_id)
-            q = await self._asset_name(s.quote_asset_id)
-            if b == base_u and q == quote_u:
-                return s.name
-        return None
+        cache = await self._ensure_cache()
+        return cache.get((base.upper(), quote.upper()))
 
     async def _resolve_path(self, from_asset: str, to_asset: str) -> Optional[ConversionPath]:
         from_u = from_asset.upper()

@@ -4,31 +4,82 @@ A modern, pure Python asyncio client library for the cTrader Open API. This libr
 
 ## Features
 
-### Core
+### Core Architecture
 ✅ **Pure Asyncio** - No Twisted dependencies, native Python async/await  
 ✅ **Clean API** - Intuitive, high-level interface for common operations  
 ✅ **Type Safe** - Full type hints for better IDE support and type checking  
 ✅ **Context Managers** - Automatic connection lifecycle management  
-✅ **Well Tested** - Comprehensive test coverage (43+ unit tests)  
+✅ **Well Tested** - Comprehensive test coverage (48+ unit tests)  
 ✅ **Production Ready** - Error handling, reconnection, rate limiting
+
+### Authentication & Session
+✅ **OAuth Flow** - HTTP-based OAuth helper for initial authentication  
+✅ **Token Refresh** - Automatic and manual token refresh  
+✅ **cTID Profile** - User identity information retrieval  
+✅ **Multi-Account** - List and switch between accounts  
+✅ **Server Version** - Get cTrader API server version
 
 ### Market Data
 ✅ **Real-time Ticks** - Async iterators for tick streaming (single & multi-symbol)  
 ✅ **Order Book Depth** - Level II market data streaming with analytics  
 ✅ **Live Candles** - Real-time candlestick updates as they form  
-✅ **Historical Data** - OHLCV candle data retrieval
+✅ **Historical Candles** - OHLCV candle data retrieval  
+✅ **Historical Ticks** - Tick-by-tick historical data for backtesting  
+✅ **Server Timestamps** - Optional server-side timestamps on tick events
 
-### Trading & Risk
-✅ **Order Management** - Market, Limit, Stop orders with protection  
-✅ **Position Management** - Open, modify, close positions with bulk operations  
-✅ **Risk Management** - Pre-trade margin calculation and validation  
-✅ **PnL Tracking** - Real-time position PnL monitoring with cost breakdown
+### Trading Operations
+✅ **Order Types** - Market, Limit, Stop, Stop-Limit orders  
+✅ **Advanced Protection** - Trailing stop, guaranteed SL, relative SL/TP  
+✅ **Position Management** - Modify SL/TP, partial/close positions  
+✅ **Order Management** - Modify, cancel pending orders  
+✅ **Bulk Operations** - Close all, cancel all, bulk modify  
+✅ **Position Lifecycle** - Track orders and deals per position
 
-### Reporting & Analytics
-✅ **Trade History** - Deal/trade history with flexible time ranges  
-✅ **Performance Analytics** - Automated win rate, profit factor, statistics  
-✅ **Position Lifecycle** - Track all fills and executions per position  
-✅ **Tax Reporting** - Generate tax reporting data and statements  
+### Risk Management
+✅ **Margin Calculation** - Pre-trade margin requirement calculation  
+✅ **Risk Validation** - Automated risk checks before trading  
+✅ **PnL Tracking** - Real-time position PnL with cost breakdown  
+✅ **Server PnL** - Server-calculated PnL for accuracy  
+✅ **Dynamic Leverage** - Tiered leverage schedule queries  
+✅ **Margin Monitoring** - Real-time margin change events  
+✅ **Margin Calls** - History and threshold configuration
+
+### Trade History & Reporting
+✅ **Deal History** - Executed trade history with time ranges  
+✅ **Order History** - Historical order retrieval  
+✅ **Order Details** - Comprehensive order information  
+✅ **Deal Offsets** - Netting account offset tracking  
+✅ **Performance Analytics** - Win rate, profit factor, statistics  
+✅ **Tax Reporting** - Generate tax reporting data
+
+### Account Management
+✅ **Account Info** - Balance, equity, margin, leverage  
+✅ **Full Account Data** - Comprehensive account metrics  
+✅ **Margin Status** - Quick margin health check  
+✅ **Cash Flow** - Deposits, withdrawals, dividends history
+
+### Symbol & Asset Catalog
+✅ **Symbol Search** - Search and filter symbols  
+✅ **Symbol Details** - Full specification retrieval  
+✅ **Categories** - Symbol category browsing  
+✅ **Asset Classes** - Asset classification  
+✅ **Conversion Symbols** - FX conversion chain discovery
+
+### Streaming & Events
+✅ **Event Bus** - Pub/sub for all server events  
+✅ **Typed Events** - Normalized model events (order, position, deal)  
+✅ **Auto-Reconnect** - Automatic reconnection with state recovery  
+✅ **Stream Resubscription** - Automatic stream recovery after reconnect  
+✅ **Backpressure** - Bounded queues with drop policies
+
+### Infrastructure
+✅ **Rate Limiting** - Token bucket algorithm for API limits  
+✅ **Circuit Breaker** - Failure detection and recovery  
+✅ **Retry Logic** - Exponential backoff with jitter  
+✅ **Metrics** - Built-in request/response metrics  
+✅ **Hooks** - Extension points for custom logic  
+✅ **Logging** - Structured logging (plain or JSON)  
+✅ **Watchdog** - Stale connection detection  
 
 ## Installation
 
@@ -42,7 +93,7 @@ pip install -e .
 
 Or directly from git:
 ```bash
-pip install "ctrader-async @ git+https://github.com/mrme000m/ctrader-async.git@<commit>"
+pip install "ctrader-async @ git+https://github.com/yourusername/ctrader-async.git@<commit>"
 ```
 
 ## Quick Start
@@ -225,6 +276,63 @@ For bots, enable:
 - `TradingStateCacheUpdater` to keep `TradingAPI` caches warm
 
 Then use `client.events` subscriptions instead of polling `get_positions()` every second.
+
+### 6) Operational configuration (logging, watchdog, token refresh)
+
+The client now supports production-focused runtime controls:
+
+- Structured logging (`plain` or `json`)
+- Stale-connection watchdog (auto-reconnect trigger)
+- Background token auto-refresh + account re-auth
+
+Constructor example:
+
+```python
+client = CTraderClient(
+    client_id="...",
+    client_secret="...",
+    access_token="...",
+    refresh_token="...",  # required for auto-refresh
+    account_id=12345,
+    host_type="live",
+
+    # logging
+    configure_logging=True,
+    log_level="INFO",
+    log_format="json",  # "plain" | "json"
+
+    # watchdog
+    watchdog_check_interval=5.0,
+    stale_connection_timeout=90.0,  # None => heartbeat_interval * 3
+
+    # token auto-refresh
+    token_auto_refresh_enabled=True,
+    token_refresh_margin_seconds=60.0,
+    token_refresh_default_expires_in=3600,
+)
+```
+
+Equivalent environment variables:
+
+```bash
+export CTRADER_CONFIGURE_LOGGING=true
+export CTRADER_LOG_LEVEL=INFO
+export CTRADER_LOG_FORMAT=json
+
+export CTRADER_WATCHDOG_CHECK_INTERVAL=5
+export CTRADER_STALE_CONNECTION_TIMEOUT=90
+
+export CTRADER_REFRESH_TOKEN="..."
+export CTRADER_TOKEN_AUTO_REFRESH_ENABLED=true
+export CTRADER_TOKEN_REFRESH_MARGIN_SECONDS=60
+export CTRADER_TOKEN_REFRESH_DEFAULT_EXPIRES_IN=3600
+```
+
+Runtime events emitted by these features:
+
+- `client.connection_stale`
+- `auth.token_refreshed`
+- `auth.token_refresh_failed`
 
 ## Streaming Market Data
 
@@ -540,39 +648,96 @@ Main client class providing access to all APIs.
 - `account` - Account information API
 - `symbols` - Symbol catalog API
 
+### Session API
+
+**Methods:**
+- `get_available_accounts()` - List accessible accounts
+- `logout()` - Logout from current account
+- `refresh_token()` - Refresh access token
+- `get_ctid_profile()` - Get cTID user profile
+- `get_server_version()` - Get API server version
+
 ### Trading API
 
 **Methods:**
 - `place_market_order()` - Place market order
-- `place_limit_order()` - Place limit order
-- `place_stop_order()` - Place stop order
-- `place_stop_limit_order()` - Place stop-limit order
+- `place_limit_order()` - Place limit order (with advanced protection)
+- `place_stop_order()` - Place stop order (with advanced protection)
+- `place_stop_limit_order()` - Place stop-limit order (with advanced protection)
 - `modify_position()` - Modify position SL/TP
+- `modify_order()` - Amend pending order
 - `close_position()` - Close position (full or partial)
 - `cancel_order()` - Cancel pending order
 - `get_positions()` - Get all open positions
 - `get_orders()` - Get all pending orders
+- `get_orders_by_position()` - Get orders linked to position
+- `list_all_orders()` - Get historical orders
 - `close_all_positions()` - Close all positions
 - `cancel_all_orders()` - Cancel all pending orders
+- `close_positions_bulk()` - Close multiple positions
+- `cancel_orders_bulk()` - Cancel multiple orders
 
 ### Market Data API
 
 **Methods:**
-- `stream_ticks()` - Stream real-time tick data for one symbol (async iterator)
-- `stream_ticks_multi()` - Stream ticks for multiple symbols (supports coalescing latest)
+- `stream_ticks()` - Stream real-time tick data (single symbol)
+- `stream_ticks_multi()` - Stream ticks for multiple symbols
+- `stream_depth()` - Stream order book depth (Level II)
+- `stream_candles()` - Stream live candlestick updates
 - `get_candles()` - Get historical candlestick data
+- `get_tick_data()` - Get historical tick data
+
+### Risk Management API
+
+**Methods:**
+- `get_expected_margin()` - Calculate required margin
+- `validate_trade_risk()` - Validate trade against risk limits
+- `get_position_pnl()` - Get position PnL breakdown
+- `get_position_pnl_realtime()` - Get server-calculated PnL
+- `get_margin_calls()` - Get margin call history
+- `get_dynamic_leverage()` - Get tiered leverage schedule
+- `update_margin_call()` - Update margin call thresholds
+- `subscribe_margin_events()` - Monitor margin changes
+- `subscribe_margin_call_events()` - Monitor margin calls
+
+### History API
+
+**Methods:**
+- `get_deals()` - Get deal/trade history
+- `get_deals_by_position()` - Get deals for specific position
+- `get_deal_offsets()` - Get netting account offsets
+- `get_order_details()` - Get detailed order information
+- `get_orders_by_position()` - Get orders linked to position
+- `get_performance_summary()` - Get performance analytics
 
 ### Account API
 
 **Methods:**
-- `get_info()` - Get account information (cached; `refresh=True` forces server fetch)
+- `get_info()` - Get basic account information
+- `get_full_account_info()` - Get comprehensive account data
+- `get_margin_status()` - Get quick margin summary
+- `get_cash_flow_history()` - Get deposits/withdrawals history
+- `refresh_cache()` - Refresh cached account data
 
-### Symbols API
+### Symbol Catalog
 
 **Methods:**
 - `get_all()` - Get all available symbols
-- `get_symbol()` - Get specific symbol details
-- `search()` - Search symbols by name/pattern
+- `get_symbol()` - Get symbol by name
+- `get_symbol_by_id()` - Get symbol by ID
+- `get_symbol_details_by_id()` - Get fresh symbol details from server
+- `search()` - Search symbols by pattern
+- `get_categories()` - Get symbol categories
+- `get_symbols_by_category()` - Get symbols in category
+- `get_conversion_symbols()` - Get FX conversion symbols
+
+### Asset Catalog
+
+**Methods:**
+- `get_all()` - Get all assets
+- `get_asset()` - Get asset by name
+- `get_asset_by_id()` - Get asset by ID
+- `get_asset_classes()` - Get asset class groupings
 
 ## Testing
 
@@ -638,13 +803,30 @@ MIT License - see LICENSE file for details.
 
 ## Contributing
 
-Contributions are welcome! Please see CONTRIBUTING.md for guidelines.
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+### Development Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/ctrader-async.git
+cd ctrader-async
+
+# Install in development mode
+pip install -e ".[dev]"
+
+# Run tests
+pytest
+```
 
 ## Support
 
-- Documentation: https://ctrader-async.readthedocs.io
+- Documentation: See [docs/API_REFERENCE.md](docs/API_REFERENCE.md)
 - Issues: https://github.com/yourusername/ctrader-async/issues
-- Discord: https://discord.gg/ctrader-async
+
+## Security
+
+For security vulnerabilities, please see [SECURITY.md](SECURITY.md).
 
 ## Changelog
 

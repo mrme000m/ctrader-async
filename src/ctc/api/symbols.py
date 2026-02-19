@@ -234,6 +234,107 @@ class SymbolCatalog:
                 if symbol.category_name and symbol.category_name.lower() == category_name.lower()
             ]
     
+    async def get_symbol_details_by_id(self, symbol_id: int) -> Optional[Symbol]:
+        """Fetch full symbol details from the server by ID.
+
+        Unlike ``get_symbol_by_id()`` which uses the local cache only, this
+        method issues a ``ProtoOASymbolByIdReq`` to get the complete and
+        up-to-date symbol specification from the server, then updates the
+        cache with the result.
+
+        Args:
+            symbol_id: Symbol identifier
+
+        Returns:
+            Symbol object with full details, or None if not found
+
+        Example:
+            >>> sym = await client.symbols.get_symbol_details_by_id(1)
+            >>> print(f"{sym.name}: digits={sym.digits}, lot_size={sym.lot_size}")
+        """
+        try:
+            from ..messages.OpenApiMessages_pb2 import (
+                ProtoOASymbolByIdReq,
+                ProtoOASymbolByIdRes,
+            )
+
+            req = ProtoOASymbolByIdReq()
+            req.ctidTraderAccountId = self.config.account_id
+            req.symbolId.append(int(symbol_id))
+
+            response = await self.protocol.send_request(
+                req,
+                timeout=self.config.request_timeout,
+                request_type="SymbolById",
+            )
+
+            if not isinstance(response, ProtoOASymbolByIdRes):
+                raise ValueError(f"Unexpected response type: {type(response)}")
+
+            symbols = list(getattr(response, "symbol", []) or [])
+            if not symbols:
+                return None
+
+            symbol = self._parse_symbol(symbols[0])
+
+            # Update the cache with the fresh data
+            async with self._lock:
+                self._symbols_by_id[symbol.id] = symbol
+                if symbol.name:
+                    self._symbols_by_name[symbol.name.upper()] = symbol
+
+            return symbol
+
+        except Exception as e:
+            logger.error(f"Failed to get symbol details for id={symbol_id}: {e}", exc_info=True)
+            raise
+
+    async def get_conversion_symbols(self, first_asset_id: int, last_asset_id: int) -> list[Symbol]:
+        """Get symbols usable for converting one asset into another.
+
+        Uses ``ProtoOASymbolsForConversionReq`` and returns the matching
+        light symbols from server response.
+
+        Args:
+            first_asset_id: Source asset identifier
+            last_asset_id: Target asset identifier
+
+        Returns:
+            List of conversion-capable symbols (may be empty)
+
+        Example:
+            >>> syms = await client.symbols.get_conversion_symbols(1, 2)
+            >>> print([s.name for s in syms])
+        """
+        try:
+            from ..messages.OpenApiMessages_pb2 import ProtoOASymbolsForConversionReq
+
+            req = ProtoOASymbolsForConversionReq()
+            req.ctidTraderAccountId = self.config.account_id
+            req.firstAssetId = int(first_asset_id)
+            req.lastAssetId = int(last_asset_id)
+
+            response = await self.protocol.send_request(
+                req,
+                timeout=self.config.request_timeout,
+                request_type="SymbolsForConversion",
+            )
+
+            if not hasattr(response, "symbol"):
+                raise ValueError(f"Unexpected response type: {type(response)}")
+
+            output: list[Symbol] = []
+            for symbol_data in getattr(response, "symbol", []) or []:
+                output.append(self._parse_symbol(symbol_data))
+
+            return output
+        except Exception as e:
+            logger.error(
+                f"Failed to get conversion symbols ({first_asset_id} -> {last_asset_id}): {e}",
+                exc_info=True,
+            )
+            raise
+
     def _parse_symbol(self, symbol_data: any) -> Symbol:
         """Parse symbol from protobuf data."""
         return Symbol(

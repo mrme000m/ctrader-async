@@ -75,3 +75,6 @@ markers = [
   "integration: tests that require real cTrader connectivity and credentials",
   "slow: slow tests",
 ]
+
+[tool.setuptools.package-data]
+ctc = ["py.typed"]

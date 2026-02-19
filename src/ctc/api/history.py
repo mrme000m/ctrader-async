@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Optional
 from datetime import datetime, timezone, timedelta
 
 from ..models import Deal, Order
+from dataclasses import dataclass
 
 if TYPE_CHECKING:
     from ..protocol import ProtocolHandler
@@ -22,6 +23,27 @@ if TYPE_CHECKING:
     from ..api.symbols import SymbolCatalog
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DealOffset:
+    """Deal offset information (for netting accounts).
+    
+    In netting accounts, deals can offset each other to close positions.
+    This represents the relationship between opening and closing deals.
+    
+    Attributes:
+        offset_id: Offset identifier
+        open_deal_id: Opening deal ID
+        close_deal_id: Closing deal ID
+        volume: Volume offset (in lots)
+        timestamp: Offset timestamp
+    """
+    offset_id: int
+    open_deal_id: int
+    close_deal_id: int
+    volume: float
+    timestamp: int
 
 
 class HistoryAPI:
@@ -409,6 +431,142 @@ class HistoryAPI:
             logger.error(f"Error parsing order: {e}", exc_info=True)
             return None
     
+    async def get_deal_offsets(
+        self,
+        from_timestamp: Optional[int] = None,
+        to_timestamp: Optional[int] = None,
+        days: Optional[int] = None
+    ) -> list[DealOffset]:
+        """Get deal offsets for netting accounts.
+        
+        In netting accounts, positions are tracked as net volume per symbol.
+        Deal offsets track which opening deals were closed by which closing deals.
+        This is primarily useful for reconciliation and tax reporting.
+        
+        Args:
+            from_timestamp: Start time in milliseconds (optional)
+            to_timestamp: End time in milliseconds (optional)
+            days: Get offsets from last N days (alternative to timestamps)
+            
+        Returns:
+            List of DealOffset objects
+            
+        Example:
+            >>> # Get deal offsets from last 30 days
+            >>> offsets = await client.history.get_deal_offsets(days=30)
+            >>> for offset in offsets:
+            ...     print(f"Deal {offset.open_deal_id} closed by {offset.close_deal_id}")
+        """
+        from ..messages.OpenApiMessages_pb2 import (
+            ProtoOADealOffsetListReq,
+            ProtoOADealOffsetListRes,
+        )
+        
+        # Calculate timestamps if days specified
+        if days is not None:
+            to_timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
+            from_timestamp = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp() * 1000)
+        
+        # Default to last 30 days if no time range specified
+        if from_timestamp is None:
+            from_timestamp = int((datetime.now(timezone.utc) - timedelta(days=30)).timestamp() * 1000)
+        if to_timestamp is None:
+            to_timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
+        
+        offsets = []
+        has_more = True
+        
+        # Pagination loop
+        while has_more:
+            # Build request
+            req = ProtoOADealOffsetListReq()
+            req.ctidTraderAccountId = self.config.account_id
+            req.fromTimestamp = from_timestamp
+            req.toTimestamp = to_timestamp
+            req.maxRows = 100  # Request in chunks
+            
+            # Send request
+            response = await self.protocol.send_request(
+                req,
+                timeout=self.config.request_timeout,
+                request_type="DealOffsetList"
+            )
+            
+            if not isinstance(response, ProtoOADealOffsetListRes):
+                raise ValueError(f"Unexpected response type: {type(response)}")
+            
+            # Parse offsets
+            if hasattr(response, 'dealOffset'):
+                for offset_proto in response.dealOffset:
+                    offset_id = getattr(offset_proto, 'id', 0)
+                    open_deal_id = getattr(offset_proto, 'openDealId', 0)
+                    close_deal_id = getattr(offset_proto, 'closeDealId', 0)
+                    volume = getattr(offset_proto, 'volume', 0) / 100.0  # Convert to lots
+                    timestamp = getattr(offset_proto, 'createTimestamp', 0)
+                    
+                    offsets.append(DealOffset(
+                        offset_id=offset_id,
+                        open_deal_id=open_deal_id,
+                        close_deal_id=close_deal_id,
+                        volume=volume,
+                        timestamp=timestamp
+                    ))
+            
+            # Check for more data
+            has_more = getattr(response, 'hasMore', False)
+            if has_more and offsets:
+                # Update fromTimestamp to get next page
+                last_offset = offsets[-1]
+                from_timestamp = last_offset.timestamp + 1
+        
+        logger.info(f"Retrieved {len(offsets)} deal offsets")
+        return offsets
+    
+    async def get_orders_by_position(self, position_id: int) -> list[Order]:
+        """Get all orders linked to a specific position.
+
+        Uses ``ProtoOAOrderListByPositionIdReq`` to retrieve every order
+        (opening, modification, close) that was ever associated with the
+        given position. Useful for full position lifecycle analysis.
+
+        Args:
+            position_id: Position identifier
+
+        Returns:
+            List of Order objects for the position
+
+        Example:
+            >>> orders = await client.history.get_orders_by_position(123456)
+            >>> for order in orders:
+            ...     print(f"Order {order.id}: {order.order_type} {order.status}")
+        """
+        from ..messages.OpenApiMessages_pb2 import (
+            ProtoOAOrderListByPositionIdReq,
+            ProtoOAOrderListByPositionIdRes,
+        )
+
+        req = ProtoOAOrderListByPositionIdReq()
+        req.ctidTraderAccountId = self.config.account_id
+        req.positionId = int(position_id)
+
+        response = await self.protocol.send_request(
+            req,
+            timeout=self.config.request_timeout,
+            request_type="OrderListByPositionId",
+        )
+
+        if not isinstance(response, ProtoOAOrderListByPositionIdRes):
+            raise ValueError(f"Unexpected response type: {type(response)}")
+
+        orders = []
+        for order_proto in list(getattr(response, "order", []) or []):
+            order = await self._parse_order(order_proto)
+            if order:
+                orders.append(order)
+
+        logger.info(f"Retrieved {len(orders)} orders for position {position_id}")
+        return orders
+
     async def get_performance_summary(
         self,
         days: int = 30

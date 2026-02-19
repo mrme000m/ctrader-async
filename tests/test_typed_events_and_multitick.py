@@ -9,6 +9,7 @@ from ctc.utils import EventBus
 from ctc.utils.typed_events import TickEvent
 from ctc.models import Tick
 from ctc.streams.multi_tick_stream import MultiTickStream
+from ctc.streams.tick_stream import TickStream
 
 
 class _FakeSymbols:
@@ -101,5 +102,50 @@ async def test_multitickstream_coalesces_latest(monkeypatch):
     assert isinstance(t, Tick)
     assert t.symbol_id == 101
     assert t.timestamp == 2
+
+    await stream.__aexit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_tickstream_subscribe_sets_timestamp_flag(monkeypatch):
+    from ctc.transport import ProtocolFraming
+
+    monkeypatch.setattr(ProtocolFraming, "extract_payload", lambda env: env._payload)
+
+    proto = _FakeProtocol()
+    cfg = types.SimpleNamespace(account_id=1, tick_queue_size=10)
+    syms = _FakeSymbols({"EURUSD": 101})
+
+    stream = TickStream(proto, cfg, syms, "EURUSD", subscribe_to_timestamp=True)
+    await stream.__aenter__()
+
+    req, _kwargs = proto.sent[0]
+    assert getattr(req, "subscribeToSpotTimestamp", False) is True
+
+    await stream.__aexit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_multitickstream_subscribe_sets_timestamp_flag(monkeypatch):
+    from ctc.transport import ProtocolFraming
+
+    monkeypatch.setattr(ProtocolFraming, "extract_payload", lambda env: env._payload)
+
+    proto = _FakeProtocol()
+    cfg = types.SimpleNamespace(account_id=1, tick_queue_size=10)
+    syms = _FakeSymbols({"EURUSD": 101, "GBPUSD": 102})
+
+    stream = MultiTickStream(
+        proto,
+        cfg,
+        syms,
+        ["EURUSD", "GBPUSD"],
+        coalesce_latest=True,
+        subscribe_to_timestamp=True,
+    )
+    await stream.__aenter__()
+
+    req, _kwargs = proto.sent[0]
+    assert getattr(req, "subscribeToSpotTimestamp", False) is True
 
     await stream.__aexit__(None, None, None)

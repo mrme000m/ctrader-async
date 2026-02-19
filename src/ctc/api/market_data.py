@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 from ..models import Tick, Candle
 from ..enums import TimeFrame
+from ..utils.rate_limiter import TokenBucketRateLimiter
 
 if TYPE_CHECKING:
     from ..protocol import ProtocolHandler
@@ -49,6 +50,11 @@ class MarketDataAPI:
         self.config = config
         self.symbols = symbols
         self._client = client
+        # Separate rate limiter for historical data (lower limit than trading)
+        self._rate_limiter = TokenBucketRateLimiter(
+            rate=config.rate_limit_historical,
+            capacity=config.rate_limit_historical,
+        )
     
     async def get_candles(
         self,
@@ -70,6 +76,7 @@ class MarketDataAPI:
         Returns:
             List of candles
         """
+        await self._rate_limiter.acquire()
         try:
             from ..messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq
             from ..enums import to_proto_timeframe
@@ -121,11 +128,13 @@ class MarketDataAPI:
             logger.error(f"Failed to get candles: {e}", exc_info=True)
             raise
     
-    def stream_ticks(self, symbol: str):
+    def stream_ticks(self, symbol: str, *, subscribe_to_timestamp: bool = False):
         """Stream real-time tick data.
         
         Args:
             symbol: Symbol name
+            subscribe_to_timestamp: Request server-side spot timestamps in
+                subscribe payload (``subscribeToSpotTimestamp``)
             
         Returns:
             Async context manager that yields ticks
@@ -136,18 +145,32 @@ class MarketDataAPI:
             ...         print(f"Tick: {tick.bid}/{tick.ask}")
         """
         from ..streams import TickStream
-        s = TickStream(self.protocol, self.config, self.symbols, symbol)
+        s = TickStream(
+            self.protocol,
+            self.config,
+            self.symbols,
+            symbol,
+            subscribe_to_timestamp=subscribe_to_timestamp,
+        )
         # Attach client for reconnect recovery (best-effort)
         if self._client is not None:
             setattr(s, "_client", self._client)
         return s
 
-    def stream_ticks_multi(self, symbols: list[str] | tuple[str, ...], *, coalesce_latest: bool = True):
+    def stream_ticks_multi(
+        self,
+        symbols: list[str] | tuple[str, ...],
+        *,
+        coalesce_latest: bool = True,
+        subscribe_to_timestamp: bool = False,
+    ):
         """Stream real-time tick data for multiple symbols.
 
         Args:
             symbols: Iterable of symbol names
             coalesce_latest: If True, keep only latest tick per symbol when under load
+            subscribe_to_timestamp: Request server-side spot timestamps in
+                subscribe payload (``subscribeToSpotTimestamp``)
 
         Returns:
             Async context manager yielding Tick objects
@@ -160,6 +183,7 @@ class MarketDataAPI:
             self.symbols,
             symbols,
             coalesce_latest=coalesce_latest,
+            subscribe_to_timestamp=subscribe_to_timestamp,
         )
         if self._client is not None:
             setattr(s, "_client", self._client)
@@ -225,6 +249,93 @@ class MarketDataAPI:
             setattr(s, "_client", self._client)
         return s
     
+    async def get_tick_data(
+        self,
+        symbol: str,
+        quote_type: str = "BID",
+        from_timestamp: Optional[int] = None,
+        to_timestamp: Optional[int] = None,
+        count: int = 1000,
+    ) -> list[dict]:
+        """Get historical raw tick data for a symbol.
+
+        Fetches tick-by-tick price history using `ProtoOAGetTickDataReq`.
+        Useful for backtesting, tick-level analysis, and custom charting.
+
+        Args:
+            symbol: Symbol name (e.g., "EURUSD")
+            quote_type: "BID" or "ASK" (default: "BID")
+            from_timestamp: Start time in milliseconds (optional)
+            to_timestamp: End time in milliseconds (optional)
+            count: Maximum number of ticks to return (default: 1000)
+
+        Returns:
+            List of dicts with keys: ``timestamp``, ``price``, ``type``
+
+        Example:
+            >>> ticks = await market_data.get_tick_data("EURUSD", quote_type="BID", count=500)
+            >>> for tick in ticks:
+            ...     print(f"{tick['timestamp']}: {tick['price']}")
+        """
+        await self._rate_limiter.acquire()
+        try:
+            from ..messages.OpenApiMessages_pb2 import ProtoOAGetTickDataReq
+            from ..messages.OpenApiModelMessages_pb2 import ProtoOAQuoteType
+
+            symbol_info = await self.symbols.get_symbol(symbol)
+            if not symbol_info:
+                raise ValueError(f"Symbol not found: {symbol}")
+
+            import time as _time
+            now_ms = int(_time.time() * 1000)
+            if to_timestamp is None:
+                to_timestamp = now_ms
+            if from_timestamp is None:
+                from_timestamp = to_timestamp - 3600_000  # 1 hour default window
+
+            qt = ProtoOAQuoteType.BID if quote_type.upper() == "BID" else ProtoOAQuoteType.ASK
+
+            req = ProtoOAGetTickDataReq()
+            req.ctidTraderAccountId = self.config.account_id
+            req.symbolId = symbol_info.id
+            req.type = qt
+            req.fromTimestamp = int(from_timestamp)
+            req.toTimestamp = int(to_timestamp)
+
+            response = await self.protocol.send_request(
+                req,
+                timeout=self.config.request_timeout,
+                request_type="GetTickData",
+            )
+
+            scale = 10 ** symbol_info.digits
+            ticks = []
+            tick_data_list = list(getattr(response, "tickData", []) or [])
+
+            # cTrader tick data uses cumulative timestamps and delta prices
+            cumulative_timestamp = int(from_timestamp)
+            cumulative_price = 0
+
+            for td in tick_data_list:
+                cumulative_timestamp += int(getattr(td, "timestamp", 0))
+                cumulative_price += int(getattr(td, "tick", 0))
+                ticks.append({
+                    "timestamp": cumulative_timestamp,
+                    "price": round(cumulative_price / scale, symbol_info.digits),
+                    "type": quote_type.upper(),
+                })
+
+            has_more = bool(getattr(response, "hasMore", False))
+            logger.info(
+                f"Retrieved {len(ticks)} {quote_type} ticks for {symbol}"
+                + (" (more available)" if has_more else "")
+            )
+            return ticks
+
+        except Exception as e:
+            logger.error(f"Failed to get tick data: {e}", exc_info=True)
+            raise
+
     def _parse_candle(self, bar: any, symbol_info: any, timeframe: TimeFrame) -> Candle:
         """Parse candle from protobuf data."""
         # cTrader uses deltas for OHLC

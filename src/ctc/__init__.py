@@ -71,6 +71,7 @@ from .utils.errors import (
     SymbolNotFoundError,
     OrderError,
 )
+from .auth import OAuthHelper
 
 # Bot/agent utilities
 from .utils import (
@@ -141,6 +142,7 @@ __all__ = [
     "RateLimitError",
     "SymbolNotFoundError",
     "OrderError",
+    "OAuthHelper",
 
     # Bot/agent utilities
     "EventBus",

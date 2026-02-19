@@ -323,7 +323,6 @@ class ProtocolHandler:
             
             # Dispatch non-correlated messages (or unmatched responses) to handlers
             await self.dispatcher.dispatch(proto_msg)
-            await self.events.emit("protobuf.envelope", proto_msg)
         
         except Exception as e:
             logger.error(f"Error handling message: {e}", exc_info=True)

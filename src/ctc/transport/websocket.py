@@ -20,12 +20,22 @@ from typing import AsyncIterator, Optional
 from contextlib import asynccontextmanager
 
 try:
-    import websockets
-    from websockets.client import WebSocketClientProtocol
+    # websockets >= 14 uses the asyncio-native API; the legacy client module
+    # (websockets.client / WebSocketClientProtocol) was deprecated in 14.0 and
+    # removed in 15.0.  Import from the new location with a graceful fallback.
+    from websockets.asyncio.client import connect as _ws_connect
+    from websockets.exceptions import ConnectionClosed as _WsConnectionClosed
     WEBSOCKETS_AVAILABLE = True
 except ImportError:
-    WEBSOCKETS_AVAILABLE = False
-    WebSocketClientProtocol = None
+    try:
+        # Fallback for websockets < 14 (legacy API)
+        from websockets import connect as _ws_connect  # type: ignore[assignment]
+        from websockets.exceptions import ConnectionClosed as _WsConnectionClosed
+        WEBSOCKETS_AVAILABLE = True
+    except ImportError:
+        WEBSOCKETS_AVAILABLE = False
+        _ws_connect = None  # type: ignore[assignment]
+        _WsConnectionClosed = Exception  # type: ignore[assignment,misc]
 
 from .base import AsyncTransport
 
@@ -66,7 +76,7 @@ class AsyncWebSocketTransport(AsyncTransport):
                 "Install it with: pip install websockets"
             )
         
-        self._websocket: Optional[WebSocketClientProtocol] = None
+        self._websocket = None  # websockets.asyncio.client.ClientConnection
         self._receive_task: Optional[asyncio.Task] = None
         self._queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._connected = False
@@ -121,20 +131,23 @@ class AsyncWebSocketTransport(AsyncTransport):
         logger.info(f"Connecting to WebSocket: {uri}")
         
         try:
-            # Connect to WebSocket
+            # Connect to WebSocket using the modern asyncio-native API.
+            # `additional_headers` replaces the deprecated `extra_headers` param.
+            connect_kwargs = dict(
+                ping_interval=self._ping_interval,
+                ping_timeout=self._ping_timeout,
+                max_size=10 * 1024 * 1024,  # 10 MB max message size
+            )
+            if ssl is not None:
+                connect_kwargs["ssl"] = ssl
+            if extra_headers is not None:
+                connect_kwargs["additional_headers"] = extra_headers
+            if subprotocols is not None:
+                connect_kwargs["subprotocols"] = subprotocols
+
             self._websocket = await asyncio.wait_for(
-                websockets.connect(
-                    uri,
-                    ssl=ssl,
-                    extra_headers=extra_headers,
-                    subprotocols=subprotocols,
-                    ping_interval=self._ping_interval,
-                    ping_timeout=self._ping_timeout,
-                    # Use binary frames for protobuf messages
-                    # This is critical for proper message handling
-                    max_size=10 * 1024 * 1024,  # 10MB max message size
-                ),
-                timeout=timeout
+                _ws_connect(uri, **connect_kwargs),
+                timeout=timeout,
             )
             
             self._host = clean_host
@@ -179,7 +192,7 @@ class AsyncWebSocketTransport(AsyncTransport):
             
             logger.debug(f"Sent {length} bytes over WebSocket")
         
-        except websockets.exceptions.ConnectionClosed as e:
+        except _WsConnectionClosed as e:
             self._connected = False
             raise ConnectionError(f"WebSocket connection closed: {e}")
         except Exception as e:
@@ -223,7 +236,7 @@ class AsyncWebSocketTransport(AsyncTransport):
                         await self._queue.put(message)
                         logger.debug(f"Received {msg_length} bytes over WebSocket")
                 
-                except websockets.exceptions.ConnectionClosed:
+                except _WsConnectionClosed:
                     logger.info("WebSocket connection closed by server")
                     self._connected = False
                     break

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Optional
 
 from .config import ClientConfig
@@ -20,6 +21,7 @@ from .utils.reconnect import ReconnectManager, ReconnectConfig
 from .utils.metrics import MetricsCollector
 from .utils.stream_registry import StreamRegistry
 from .utils.tick_store import TickStore
+from .utils.logging import setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -135,9 +137,13 @@ class CTraderClient:
         self.conversion_subscriptions = None
 
         self._reconnect_task: asyncio.Task | None = None
+        self._watchdog_task: asyncio.Task | None = None
+        self._token_refresh_task: asyncio.Task | None = None
         self._reconnect_manager: ReconnectManager | None = None
         self._closing: bool = False
         self._hooks_attached: bool = False
+        self._last_inbound_monotonic: float = time.monotonic()
+        self._token_expires_in: int | None = None
 
         # Tracks active streams that can be resubscribed after reconnect
         self._stream_registry = StreamRegistry()
@@ -163,34 +169,35 @@ class CTraderClient:
         self._authenticated = False
         self._message_task: Optional[asyncio.Task] = None
         
-        # Configure logging
-        log_level = getattr(logging, self.config.log_level.upper(), logging.INFO)
-        logging.basicConfig(
-            level=log_level,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
+        if getattr(self.config, "configure_logging", False):
+            setup_logging(self.config.log_level, log_format=self.config.log_format)
     
     @classmethod
-    def from_config(cls, config: ClientConfig) -> CTraderClient:
+    def from_config(cls, config: ClientConfig, **kwargs) -> CTraderClient:
         """Create client from configuration object.
-        
+
         Args:
             config: Client configuration
-            
+            **kwargs: Additional keyword arguments forwarded to the constructor
+                      (e.g. use_websocket, auto_model_bridge, auto_cache_updater).
+
         Returns:
             CTraderClient instance
-            
+
         Example:
             >>> config = ClientConfig.from_env()
-            >>> client = CTraderClient.from_config(config)
+            >>> client = CTraderClient.from_config(config, use_websocket=True)
         """
-        return cls(
-            client_id=config.client_id,
-            client_secret=config.client_secret,
-            access_token=config.access_token,
-            account_id=config.account_id,
-            host_type=config.host_type,
-        )
+        # Build a kwargs dict from every field on the config dataclass so that
+        # all optional settings (timeouts, rate limits, etc.) are preserved.
+        import dataclasses
+        config_kwargs = {
+            f.name: getattr(config, f.name)
+            for f in dataclasses.fields(config)
+        }
+        # Caller-supplied kwargs take precedence
+        config_kwargs.update(kwargs)
+        return cls(**config_kwargs)
     
     @classmethod
     def from_env(cls, prefix: str = "CTRADER_") -> CTraderClient:
@@ -232,8 +239,8 @@ class CTraderClient:
             # Create transport based on preference
             if self._use_websocket:
                 # WebSocket transport
-                ws_ping_interval = kwargs.get('websocket_ping_interval', 20.0)
-                ws_ping_timeout = kwargs.get('websocket_ping_timeout', 10.0)
+                ws_ping_interval = getattr(self.config, 'websocket_ping_interval', 20.0)
+                ws_ping_timeout = getattr(self.config, 'websocket_ping_timeout', 10.0)
                 
                 self._transport = AsyncWebSocketTransport(
                     ping_interval=ws_ping_interval,
@@ -268,6 +275,7 @@ class CTraderClient:
             # Create protocol handler
             self._protocol = ProtocolHandler(self._transport, config=self.config)
             await self._protocol.start()
+            self._last_inbound_monotonic = time.monotonic()
 
             # Attach metrics to hooks + internal protocol events (idempotent)
             try:
@@ -279,6 +287,7 @@ class CTraderClient:
                 if getattr(self._protocol, "events", None) is not None:
                     self._protocol.events.on("protocol.inbound_dropped", self.metrics.on_inbound_dropped)
                     self._protocol.events.on("stream.tick_dropped", self.metrics.on_tick_dropped)
+                    self._protocol.events.on("protobuf.envelope", self._on_protocol_inbound)
             except Exception:
                 pass
 
@@ -364,6 +373,8 @@ class CTraderClient:
                     self.model_bridge.enable()
                 self.state_cache_updater.enable()
 
+            self._start_background_tasks()
+
             logger.info("Client ready")
         
         except Exception as e:
@@ -379,20 +390,28 @@ class CTraderClient:
         from .transport import ProtocolFraming
         from .models import Tick
         from .utils.typed_events import TickEvent, execution_events_from_payload
-        from .messages.OpenApiMessages_pb2 import ProtoOASpotEvent, ProtoOAExecutionEvent
+        from .messages.OpenApiMessages_pb2 import (
+            ProtoOASpotEvent,
+            ProtoOAExecutionEvent,
+            ProtoOATrailingSLChangedEvent,
+            ProtoOAOrderErrorEvent,
+            ProtoOATraderUpdatedEvent,
+            ProtoOASymbolChangedEvent,
+            ProtoOAAccountDisconnectEvent,
+            ProtoOAAccountsTokenInvalidatedEvent,
+            ProtoOAClientDisconnectEvent,
+        )
 
+        # ── Tick handler ───────────────────────────────────────────────────
         async def on_spot(envelope):
             payload = ProtocolFraming.extract_payload(envelope)
-            # Resolve symbol name via catalog if possible
             symbol_name = None
             try:
                 info = await self.symbols.get_symbol_by_id(int(payload.symbolId))
                 symbol_name = info.name if info else None
             except Exception:
                 symbol_name = None
-
             if symbol_name is None:
-                # fallback: try to resolve from local cache
                 symbol_name = getattr(payload, "symbolName", "") or str(payload.symbolId)
 
             tick = Tick(
@@ -410,22 +429,313 @@ class CTraderClient:
                 payload=payload,
                 envelope=envelope,
             )
-            # Update last tick cache
             try:
                 await self.ticks.set(tick)
             except Exception:
                 pass
-
             await self.events.emit("tick", evt)
 
+        # ── Execution handler ──────────────────────────────────────────────
         async def on_execution(envelope):
             payload = ProtocolFraming.extract_payload(envelope)
             for event_name, event_obj in execution_events_from_payload(payload, envelope=envelope):
                 await self.events.emit(event_name, event_obj)
 
-        # Register handlers on dispatcher
+        # ── Trailing SL changed ────────────────────────────────────────────
+        async def on_trailing_sl_changed(envelope):
+            payload = ProtocolFraming.extract_payload(envelope)
+            position_id = getattr(payload, "positionId", None)
+            new_sl = getattr(payload, "stopLossPrice", None)
+            logger.info(f"Trailing SL updated for position {position_id}: {new_sl}")
+            await self.events.emit("position.trailing_sl_changed", {
+                "position_id": position_id,
+                "stop_loss_price": new_sl,
+                "payload": payload,
+            })
+
+        # ── Order error ────────────────────────────────────────────────────
+        async def on_order_error(envelope):
+            payload = ProtocolFraming.extract_payload(envelope)
+            error_code = getattr(payload, "errorCode", "UNKNOWN")
+            description = getattr(payload, "description", "")
+            order_id = getattr(payload, "orderId", None)
+            logger.error(f"Order error for order {order_id}: {error_code} - {description}")
+            await self.events.emit("order.error", {
+                "order_id": order_id,
+                "error_code": error_code,
+                "description": description,
+                "payload": payload,
+            })
+
+        # ── Trader updated (balance/equity change) ─────────────────────────
+        async def on_trader_updated(envelope):
+            payload = ProtocolFraming.extract_payload(envelope)
+            logger.debug("Trader info updated by server")
+            # Invalidate account cache so next get_info() re-fetches from server
+            try:
+                if self.account:
+                    self.account._cached_info = None
+                    self.account._cached_full_info = None
+            except Exception:
+                pass
+            await self.events.emit("account.trader_updated", {"payload": payload})
+
+        # ── Symbol changed (spec update) ───────────────────────────────────
+        async def on_symbol_changed(envelope):
+            payload = ProtocolFraming.extract_payload(envelope)
+            symbol_ids = list(getattr(payload, "symbolId", []) or [])
+            logger.info(f"Symbol spec changed for ids={symbol_ids}")
+            # Refresh each affected symbol in the catalog cache
+            try:
+                if self.symbols:
+                    for sid in symbol_ids:
+                        await self.symbols.get_symbol_details_by_id(int(sid))
+            except Exception as e:
+                logger.debug(f"Could not refresh symbol cache: {e}")
+            await self.events.emit("market.symbol_changed", {
+                "symbol_ids": symbol_ids,
+                "payload": payload,
+            })
+
+        # ── Account disconnect ─────────────────────────────────────────────
+        async def on_account_disconnect(envelope):
+            payload = ProtocolFraming.extract_payload(envelope)
+            account_id = getattr(payload, "ctidTraderAccountId", "?")
+            logger.warning(f"Server sent ProtoOAAccountDisconnectEvent for account {account_id}")
+            await self.events.emit("account.disconnected", {
+                "account_id": account_id,
+                "payload": payload,
+            })
+
+        # ── Token invalidated ──────────────────────────────────────────────
+        async def on_token_invalidated(envelope):
+            payload = ProtocolFraming.extract_payload(envelope)
+            account_ids = list(getattr(payload, "ctidTraderAccountIds", []) or [])
+            reason = getattr(payload, "reason", "unknown")
+            logger.error(
+                f"Server sent ProtoOAAccountsTokenInvalidatedEvent "
+                f"— token invalidated for accounts {account_ids}: {reason}"
+            )
+            await self.events.emit("auth.token_invalidated", {
+                "account_ids": account_ids,
+                "reason": reason,
+                "payload": payload,
+            })
+
+        # ── Client disconnect (common-level) ───────────────────────────────
+        async def on_client_disconnect(envelope):
+            payload = ProtocolFraming.extract_payload(envelope)
+            reason = getattr(payload, "reason", None)
+            logger.warning(f"Server sent ProtoOAClientDisconnectEvent reason={reason}")
+            await self.events.emit("client.disconnect", {
+                "reason": reason,
+                "payload": payload,
+            })
+
+        # ── Register all handlers ──────────────────────────────────────────
+        from .messages.OpenApiMessages_pb2 import (
+            ProtoOAMarginChangedEvent,
+            ProtoOAMarginCallUpdateEvent,
+            ProtoOAMarginCallTriggerEvent,
+        )
+
+        async def on_margin_changed(envelope):
+            try:
+                payload = self._protobuf.extract(envelope)
+                money_digits = getattr(payload, "moneyDigits", 2)
+                divisor = 10 ** money_digits
+                await self.events.emit("risk.margin_changed", {
+                    "position_id": getattr(payload, "positionId", None),
+                    "used_margin": getattr(payload, "usedMargin", 0) / divisor,
+                    "money_digits": money_digits,
+                    "payload": payload,
+                })
+            except Exception as e:
+                logger.debug(f"on_margin_changed error: {e}")
+
+        async def on_margin_call_update(envelope):
+            try:
+                payload = self._protobuf.extract(envelope)
+                money_digits = getattr(payload, "moneyDigits", 2)
+                divisor = 10 ** money_digits
+                await self.events.emit("risk.margin_call_update", {
+                    "event_type": "MARGIN_CALL_UPDATE",
+                    "equity": getattr(payload, "equity", 0) / divisor,
+                    "margin": getattr(payload, "margin", 0) / divisor,
+                    "margin_level": getattr(payload, "marginLevel", 0.0),
+                    "money_digits": money_digits,
+                    "payload": payload,
+                })
+            except Exception as e:
+                logger.debug(f"on_margin_call_update error: {e}")
+
+        async def on_margin_call_trigger(envelope):
+            try:
+                payload = self._protobuf.extract(envelope)
+                money_digits = getattr(payload, "moneyDigits", 2)
+                divisor = 10 ** money_digits
+                await self.events.emit("risk.margin_call_trigger", {
+                    "event_type": "MARGIN_CALL_TRIGGER",
+                    "equity": getattr(payload, "equity", 0) / divisor,
+                    "margin": getattr(payload, "margin", 0) / divisor,
+                    "margin_level": getattr(payload, "marginLevel", 0.0),
+                    "money_digits": money_digits,
+                    "payload": payload,
+                })
+            except Exception as e:
+                logger.debug(f"on_margin_call_trigger error: {e}")
+
         self._protocol.dispatcher.register(ProtoOASpotEvent().payloadType, on_spot)
         self._protocol.dispatcher.register(ProtoOAExecutionEvent().payloadType, on_execution)
+        self._protocol.dispatcher.register(ProtoOATrailingSLChangedEvent().payloadType, on_trailing_sl_changed)
+        self._protocol.dispatcher.register(ProtoOAOrderErrorEvent().payloadType, on_order_error)
+        self._protocol.dispatcher.register(ProtoOATraderUpdatedEvent().payloadType, on_trader_updated)
+        self._protocol.dispatcher.register(ProtoOASymbolChangedEvent().payloadType, on_symbol_changed)
+        self._protocol.dispatcher.register(ProtoOAAccountDisconnectEvent().payloadType, on_account_disconnect)
+        self._protocol.dispatcher.register(ProtoOAAccountsTokenInvalidatedEvent().payloadType, on_token_invalidated)
+        self._protocol.dispatcher.register(ProtoOAClientDisconnectEvent().payloadType, on_client_disconnect)
+        self._protocol.dispatcher.register(ProtoOAMarginChangedEvent().payloadType, on_margin_changed)
+        self._protocol.dispatcher.register(ProtoOAMarginCallUpdateEvent().payloadType, on_margin_call_update)
+        self._protocol.dispatcher.register(ProtoOAMarginCallTriggerEvent().payloadType, on_margin_call_trigger)
+
+    async def _on_protocol_inbound(self, _evt):
+        self._last_inbound_monotonic = time.monotonic()
+
+    def _start_background_tasks(self) -> None:
+        if self._watchdog_task is None or self._watchdog_task.done():
+            self._watchdog_task = asyncio.create_task(self._stale_connection_watchdog_loop())
+
+        if self._should_enable_token_auto_refresh():
+            if self._token_refresh_task is None or self._token_refresh_task.done():
+                self._token_refresh_task = asyncio.create_task(self._token_auto_refresh_loop())
+
+    def _should_enable_token_auto_refresh(self) -> bool:
+        return bool(
+            getattr(self.config, "token_auto_refresh_enabled", False)
+            and getattr(self.config, "refresh_token", None)
+        )
+
+    async def _stale_connection_watchdog_loop(self) -> None:
+        try:
+            check_interval = max(0.5, float(getattr(self.config, "watchdog_check_interval", 5.0)))
+            stale_timeout = getattr(self.config, "stale_connection_timeout", None)
+            if stale_timeout is None:
+                stale_timeout = max(10.0, float(self.config.heartbeat_interval) * 3.0)
+            stale_timeout = float(stale_timeout)
+
+            while not self._closing:
+                await asyncio.sleep(check_interval)
+
+                if not self.is_connected:
+                    continue
+
+                idle_seconds = time.monotonic() - self._last_inbound_monotonic
+                if idle_seconds <= stale_timeout:
+                    continue
+
+                logger.warning(
+                    "Stale connection detected: no inbound messages for %.1fs (threshold %.1fs)",
+                    idle_seconds,
+                    stale_timeout,
+                )
+
+                try:
+                    await self.events.emit(
+                        "client.connection_stale",
+                        {"idle_seconds": idle_seconds, "threshold_seconds": stale_timeout},
+                    )
+                except Exception:
+                    pass
+
+                self._last_inbound_monotonic = time.monotonic()
+                await self._on_protocol_connection_lost(
+                    {"reason": "stale_connection", "idle_seconds": idle_seconds}
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Watchdog loop failed: {e}", exc_info=True)
+
+    async def _reauth_account_with_current_token(self) -> None:
+        if not self._protocol:
+            return
+
+        from .messages.OpenApiMessages_pb2 import ProtoOAAccountAuthReq, ProtoOAAccountAuthRes
+
+        req = ProtoOAAccountAuthReq()
+        req.ctidTraderAccountId = self.config.account_id
+        req.accessToken = self.config.access_token
+
+        response = await self._protocol.send_request(
+            req,
+            timeout=self.config.auth_timeout,
+            request_type="AccountAuth",
+        )
+        if not isinstance(response, ProtoOAAccountAuthRes):
+            raise AuthenticationError(f"Unexpected account auth response: {type(response)}")
+
+    async def _token_auto_refresh_loop(self) -> None:
+        try:
+            margin = max(0.0, float(getattr(self.config, "token_refresh_margin_seconds", 60.0)))
+
+            while not self._closing:
+                expires_in = self._token_expires_in
+                if expires_in is None:
+                    expires_in = int(getattr(self.config, "token_refresh_default_expires_in", 3600))
+                delay_seconds = max(0.5, float(expires_in) - margin)
+                await asyncio.sleep(delay_seconds)
+
+                if self._closing:
+                    break
+                if not self.session:
+                    continue
+
+                refresh_tok = getattr(self.config, "refresh_token", None)
+                if not refresh_tok:
+                    logger.warning("Token auto-refresh disabled at runtime: missing refresh_token")
+                    return
+
+                try:
+                    tokens = await self.session.refresh_token(refresh_tok)
+                    new_access_token = str(tokens.get("access_token", "") or "")
+                    new_refresh_token = str(tokens.get("refresh_token", "") or "")
+                    new_expires_in = int(tokens.get("expires_in", 0) or 0)
+
+                    if not new_access_token:
+                        raise AuthenticationError("Token refresh response missing access_token")
+
+                    self.config.access_token = new_access_token
+                    if new_refresh_token:
+                        self.config.refresh_token = new_refresh_token
+                    if new_expires_in > 0:
+                        self._token_expires_in = new_expires_in
+
+                    await self._reauth_account_with_current_token()
+
+                    logger.info("Access token auto-refreshed and account re-authenticated")
+                    try:
+                        await self.events.emit(
+                            "auth.token_refreshed",
+                            {
+                                "expires_in": self._token_expires_in,
+                                "has_refresh_token": bool(self.config.refresh_token),
+                            },
+                        )
+                    except Exception:
+                        pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.error(f"Token auto-refresh failed: {e}", exc_info=True)
+                    try:
+                        await self.events.emit("auth.token_refresh_failed", {"error": e})
+                    except Exception:
+                        pass
+                    await asyncio.sleep(30.0)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Token refresh loop failed: {e}", exc_info=True)
 
     async def _on_protocol_connection_lost(self, evt):
         # Avoid reconnect loops during explicit shutdown
@@ -518,6 +828,22 @@ class CTraderClient:
             except asyncio.CancelledError:
                 pass
         self._reconnect_task = None
+
+        if self._watchdog_task and not self._watchdog_task.done():
+            self._watchdog_task.cancel()
+            try:
+                await self._watchdog_task
+            except asyncio.CancelledError:
+                pass
+        self._watchdog_task = None
+
+        if self._token_refresh_task and not self._token_refresh_task.done():
+            self._token_refresh_task.cancel()
+            try:
+                await self._token_refresh_task
+            except asyncio.CancelledError:
+                pass
+        self._token_refresh_task = None
 
         self._closing = True
 

@@ -41,12 +41,14 @@ class MultiTickStream:
         symbol_names: Iterable[str],
         *,
         coalesce_latest: bool = True,
+        subscribe_to_timestamp: bool = False,
     ):
         self.protocol = protocol
         self.config = config
         self.symbols = symbols
         self.symbol_names = [s for s in symbol_names]
         self.coalesce_latest = coalesce_latest
+        self.subscribe_to_timestamp = bool(subscribe_to_timestamp)
 
         maxsize = getattr(config, "tick_queue_size", 1000)
         self._queue: asyncio.Queue[Tick] = asyncio.Queue(maxsize=maxsize)
@@ -117,6 +119,7 @@ class MultiTickStream:
         req = ProtoOASubscribeSpotsReq()
         req.ctidTraderAccountId = self.config.account_id
         req.symbolId.extend(list(self._symbol_ids.keys()))
+        req.subscribeToSpotTimestamp = self.subscribe_to_timestamp
 
         await self.protocol.send_request(req, timeout=10.0, request_type="SubscribeSpots")
 

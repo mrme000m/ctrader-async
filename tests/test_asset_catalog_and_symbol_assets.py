@@ -52,6 +52,11 @@ class DummySymbolsRes:
         self.symbol = []
 
 
+class DummySymbolsForConversionRes:
+    def __init__(self):
+        self.symbol = []
+
+
 class DummySymbolPB:
     def __init__(self, **kw):
         self.__dict__.update(kw)
@@ -84,3 +89,21 @@ async def test_symbol_parsing_includes_asset_ids():
     assert sym is not None
     assert sym.base_asset_id == 2
     assert sym.quote_asset_id == 1
+
+
+@pytest.mark.asyncio
+async def test_symbols_for_conversion_returns_light_symbols():
+    res = DummySymbolsForConversionRes()
+    res.symbol = [
+        DummySymbolPB(symbolId=101, symbolName="EURUSD", enabled=True, baseAssetId=1, quoteAssetId=2),
+        DummySymbolPB(symbolId=102, symbolName="GBPUSD", enabled=True, baseAssetId=3, quoteAssetId=2),
+    ]
+
+    cat = SymbolCatalog(DummyProtocol(res), DummyConfig())
+    symbols = await cat.get_conversion_symbols(1, 2)
+
+    assert len(symbols) == 2
+    assert symbols[0].id == 101
+    assert symbols[0].name == "EURUSD"
+    assert symbols[1].id == 102
+    assert symbols[1].name == "GBPUSD"

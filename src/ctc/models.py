@@ -397,21 +397,25 @@ class MarginInfo:
 @dataclass
 class PositionPnL:
     """Detailed position profit/loss breakdown.
-    
+
     Provides comprehensive PnL information for a position including
     gross/net unrealized PnL, swap, commission, and other costs.
-    
+    Previously there was a separate ``PositionPnLRealtime`` class; it has been
+    merged into this one (``used_margin`` is the only field that was exclusive
+    to ``PositionPnL``).  ``PositionPnLRealtime`` is kept as an alias for
+    backward compatibility.
+
     Attributes:
         position_id: Position identifier
         gross_unrealized_pnl: Gross unrealized profit/loss
         net_unrealized_pnl: Net unrealized PnL (after costs)
         swap: Accumulated swap charges
         commission: Accumulated commission
-        used_margin: Margin used by this position
+        used_margin: Margin used by this position (None for server-push events)
         money_digits: Decimal places for money values
-        timestamp: Calculation timestamp
+        timestamp: Calculation timestamp (milliseconds)
     """
-    
+
     position_id: int
     gross_unrealized_pnl: float
     net_unrealized_pnl: float
@@ -420,24 +424,24 @@ class PositionPnL:
     used_margin: Optional[float] = None
     money_digits: int = 2
     timestamp: Optional[int] = None
-    
+
     @property
     def total_costs(self) -> float:
         """Calculate total costs (swap + commission)."""
         return abs(self.swap) + abs(self.commission)
-    
+
     @property
     def datetime(self) -> Optional[datetime]:
         """Get calculation time as datetime."""
         if self.timestamp:
             return datetime.fromtimestamp(self.timestamp / 1000.0, tz=timezone.utc)
         return None
-    
+
     @property
     def formatted_gross_pnl(self) -> str:
         """Get gross PnL formatted with proper decimals."""
         return f"{self.gross_unrealized_pnl:+.{self.money_digits}f}"
-    
+
     @property
     def formatted_net_pnl(self) -> str:
         """Get net PnL formatted with proper decimals."""
@@ -574,3 +578,210 @@ class Asset:
     name: str
     display_name: Optional[str] = None
     digits: Optional[int] = None
+
+
+@dataclass
+class AssetClass:
+    """Asset class information.
+    
+    Asset classes group assets by type (e.g., Currencies, Commodities,
+    Indices, Stocks, Crypto).
+    
+    Attributes:
+        id: Asset class identifier
+        name: Asset class name
+        asset_ids: List of asset IDs in this class
+    """
+    
+    id: int
+    name: str
+    asset_ids: list[int] = field(default_factory=list)
+
+
+@dataclass
+class LeverageTier:
+    """Dynamic leverage tier information.
+    
+    Represents a tier in a broker's dynamic leverage schedule.
+    Higher volumes typically result in lower leverage (higher margin requirements).
+    
+    Attributes:
+        tier_id: Tier identifier
+        volume_from: Starting volume for this tier (in lots or units)
+        volume_to: Ending volume for this tier (None = unlimited)
+        leverage: Leverage for this tier (e.g., 100.0 for 1:100)
+        margin_percent: Required margin percentage (e.g., 1.0 for 1%)
+    """
+    tier_id: int
+    volume_from: float
+    volume_to: Optional[float]
+    leverage: float
+    
+    @property
+    def margin_percent(self) -> float:
+        """Calculate margin percentage from leverage."""
+        return 100.0 / self.leverage if self.leverage > 0 else 0.0
+    
+    def __repr__(self) -> str:
+        vol_to = f"{self.volume_to:.2f}" if self.volume_to else "∞"
+        return (
+            f"<LeverageTier {self.tier_id}: "
+            f"{self.volume_from:.2f}-{vol_to} @ 1:{self.leverage:.0f}>"
+        )
+
+
+@dataclass
+class DynamicLeverage:
+    """Dynamic leverage information for a symbol.
+    
+    Contains the tiered leverage schedule that applies to a symbol.
+    
+    Attributes:
+        symbol_id: Symbol identifier
+        symbol_name: Symbol name
+        tiers: List of leverage tiers (ordered by volume)
+        total_volume: Total open volume for margin calculation
+    """
+    symbol_id: int
+    symbol_name: Optional[str]
+    tiers: list = field(default_factory=list)
+    total_volume: float = 0.0
+    
+    def get_leverage_for_volume(self, volume: float) -> float:
+        """Get the applicable leverage for a given volume.
+        
+        Args:
+            volume: Trade volume in lots
+            
+        Returns:
+            Leverage value (e.g., 100.0 for 1:100)
+        """
+        for tier in self.tiers:
+            if tier.volume_to is None or volume <= tier.volume_to:
+                return tier.leverage
+        # If volume exceeds all tiers, use the last tier's leverage
+        return self.tiers[-1].leverage if self.tiers else 100.0
+    
+    def calculate_margin(self, volume: float, notional_value: float) -> float:
+        """Calculate margin required for a given volume.
+        
+        Args:
+            volume: Trade volume in lots
+            notional_value: Notional value of the position in base currency
+            
+        Returns:
+            Required margin in account currency
+        """
+        leverage = self.get_leverage_for_volume(volume)
+        return notional_value / leverage if leverage > 0 else 0.0
+
+
+# Backward-compatible alias — PositionPnLRealtime has been merged into PositionPnL.
+PositionPnLRealtime = PositionPnL
+
+
+@dataclass
+class FullAccountInfo:
+    """Complete account information including margin and risk metrics.
+    
+    This provides a comprehensive view of the trading account with all
+    available financial and risk data.
+    
+    Attributes:
+        account_id: Account identifier
+        balance: Account balance
+        equity: Account equity (balance + unrealized PnL)
+        margin: Used margin
+        free_margin: Free margin available for trading
+        margin_level: Margin level percentage (equity / margin * 100)
+        currency: Account currency
+        account_type: Account type (HEDGED, NETTED, SPREAD_BETTING)
+        leverage: Account leverage (e.g., 100.0 for 1:100)
+        money_digits: Decimal places for money values
+        unrealized_pnl: Total unrealized PnL across all positions
+        realized_pnl: Realized PnL for the session
+        swap: Total swap charges across all positions
+        commission: Total commission charges
+        timestamp: Last update timestamp
+    """
+    account_id: int
+    balance: float
+    equity: float
+    margin: float
+    free_margin: float
+    currency: str
+    account_type: str
+    money_digits: int = 2
+    margin_level: Optional[float] = None
+    leverage: Optional[float] = None
+    unrealized_pnl: Optional[float] = None
+    realized_pnl: Optional[float] = None
+    swap: Optional[float] = None
+    commission: Optional[float] = None
+    timestamp: Optional[int] = None
+    
+    @property
+    def last_update_datetime(self) -> Optional[datetime]:
+        """Get last update time as datetime (UTC, timezone-aware)."""
+        if self.timestamp:
+            return datetime.fromtimestamp(self.timestamp / 1000.0, tz=timezone.utc)
+        return None
+    
+    @property
+    def formatted_balance(self) -> str:
+        """Get formatted balance with proper decimals."""
+        return f"{self.balance:.{self.money_digits}f}"
+    
+    @property
+    def formatted_equity(self) -> str:
+        """Get formatted equity with proper decimals."""
+        return f"{self.equity:.{self.money_digits}f}"
+    
+    @property
+    def formatted_margin(self) -> str:
+        """Get formatted margin with proper decimals."""
+        return f"{self.margin:.{self.money_digits}f}"
+    
+    @property
+    def formatted_free_margin(self) -> str:
+        """Get formatted free margin with proper decimals."""
+        return f"{self.free_margin:.{self.money_digits}f}"
+    
+    @property
+    def formatted_margin_level(self) -> str:
+        """Get formatted margin level with % sign."""
+        if self.margin_level is not None:
+            return f"{self.margin_level:.2f}%"
+        return "N/A"
+    
+    @property
+    def margin_call_risk(self) -> str:
+        """Get margin call risk assessment.
+        
+        Returns:
+            "LOW" if margin level > 150%
+            "MEDIUM" if margin level > 100% and <= 150%
+            "HIGH" if margin level > 50% and <= 100%
+            "CRITICAL" if margin level <= 50%
+            "UNKNOWN" if margin level is None
+        """
+        if self.margin_level is None:
+            return "UNKNOWN"
+        if self.margin_level > 150:
+            return "LOW"
+        elif self.margin_level > 100:
+            return "MEDIUM"
+        elif self.margin_level > 50:
+            return "HIGH"
+        else:
+            return "CRITICAL"
+    
+    def __repr__(self) -> str:
+        return (
+            f"<FullAccountInfo "
+            f"balance={self.formatted_balance} {self.currency}, "
+            f"equity={self.formatted_equity}, "
+            f"margin={self.formatted_margin}, "
+            f"free_margin={self.formatted_free_margin}, "
+            f"margin_level={self.formatted_margin_level}>"
+        )

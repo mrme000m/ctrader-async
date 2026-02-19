@@ -5,6 +5,96 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+#### Session & Authentication
+- **Token Refresh** - Automatic and manual token refresh support
+  - `session.refresh_token()` - Refresh access token via protobuf API
+  - `OAuthHelper` class for HTTP-based OAuth flow
+  - `get_auth_uri()`, `exchange_code()`, `refresh_token_http()` methods
+  - Token auto-refresh background task with configurable margin
+
+- **cTID Profile** - User identity information
+  - `session.get_ctid_profile()` - Get cTID user profile details
+  - Returns user_id, nickname, email, preferred language
+
+- **Account Management** - Enhanced multi-account support
+  - `session.get_available_accounts()` - List accessible accounts
+  - `session.switch_account()` - Switch between accounts
+  - `session.get_server_version()` - Get API server version
+
+#### Symbol & Asset Management
+- **Symbol Details by ID** - Server-side symbol lookup
+  - `symbols.get_symbol_details_by_id()` - Fresh symbol details from server
+  - Updates local cache with authoritative data
+
+- **Conversion Symbols** - Currency conversion chain discovery
+  - `symbols.get_conversion_symbols()` - Get symbols for asset conversion
+  - Used for FX rate calculations between any two assets
+
+- **Asset Classes** - Asset categorization
+  - `assets.get_asset_classes()` - Get asset class groupings
+  - Currencies, Commodities, Indices, Stocks, Crypto
+
+#### Trading Enhancements
+- **Orders by Position** - Complete position lifecycle tracking
+  - `trading.get_orders_by_position()` - Get all orders for a position
+  - `history.get_orders_by_position()` - Historical order retrieval
+
+- **Historical Order List** - Comprehensive order history
+  - `trading.list_all_orders()` - Get orders across time ranges
+  - Supports pagination for large histories
+
+- **Advanced Order Features** - Extended order capabilities
+  - `subscribeToSpotTimestamp` flag in tick streams
+  - Coalescing latest tick support in multi-symbol streams
+
+#### Market Data
+- **Historical Tick Data** - Tick-by-tick price history
+  - `market_data.get_tick_data()` - Raw tick data for backtesting
+  - Supports BID and ASK quote types
+  - Cumulative timestamp and delta price decoding
+
+#### Risk Management
+- **Margin Call Updates** - Dynamic margin call configuration
+  - `risk.update_margin_call()` - Update margin call thresholds
+  - Configure MARGIN_CALL and STOP_OUT levels
+
+#### Infrastructure
+- **Production Runtime Controls**
+  - Structured logging (plain or JSON format)
+  - Stale-connection watchdog with auto-reconnect
+  - Background token auto-refresh
+  - Connection debug mode for troubleshooting
+
+#### Event Handling
+- **All Server-Push Events** - Complete event coverage
+  - `position.trailing_sl_changed` - Trailing stop adjustments
+  - `order.error` - Async order error notifications
+  - `account.trader_updated` - Account info changes
+  - `market.symbol_changed` - Symbol specification updates
+  - `account.disconnected` - Server-initiated disconnect
+  - `auth.token_invalidated` - Token invalidation events
+  - `client.disconnect` - Connection-level disconnect
+
+### Changed
+
+#### Documentation
+- Updated API_REFERENCE.md with all new methods
+- Added comprehensive examples for all features
+- Improved inline docstrings throughout codebase
+
+### Fixed
+
+- Fixed `kwargs` scope bug in `client.connect()` method
+- Fixed incorrect method name in `validate_trade_risk()` (now uses `get_full_account_info()`)
+- Fixed event handler import casing for `ProtoOATrailingSLChangedEvent`
+- All identified gaps from audit documents now addressed
+
+---
+
 ## [0.1.0] - 2024-02-06
 
 ### Added
@@ -54,6 +144,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Balance and equity tracking
 - Margin calculations
 
+#### Risk Management
+- Expected margin calculation
+- Position PnL tracking
+- Margin call monitoring
+- Dynamic leverage queries
+
+#### Trade History
+- Deal history retrieval
+- Performance analytics
+- Order details
+
 ### Improvements over OpenApiPy
 - No Twisted dependency (pure asyncio)
 - Clean async/await API (no callbacks)
@@ -63,102 +164,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Easier testing with transport abstraction
 - Comprehensive documentation
 - Better performance (native async, no thread synchronization)
-
-## [Unreleased]
-
-### Added
-
-#### Market Data Enhancements
-- **Order Book Depth Streaming (Level II)** - Real-time order book data with incremental updates
-  - `DepthStream` class for streaming market depth
-  - `DepthQuote` and `DepthSnapshot` models with built-in analytics
-  - `stream_depth()` method in MarketDataAPI
-  - Analytics: spread calculation, volume aggregation, order book imbalance
-  - Example: `examples/order_book_depth.py`
-
-- **Live Candle Streaming** - Real-time candlestick updates as candles form
-  - `CandleStream` class for streaming live candles
-  - `stream_candles()` method in MarketDataAPI
-  - Support for all timeframes (M1, M5, H1, D1, etc.)
-  - Example: `examples/live_candle_streaming.py` with pattern detection
-
-#### Risk Management APIs
-- **Pre-trade Margin Calculation** - Calculate margin requirements before placing orders
-  - `RiskAPI` class with comprehensive risk management methods
-  - `get_expected_margin()` - Calculate required margin for proposed trades
-  - `MarginInfo` model with formatting helpers
-  - Prevents insufficient margin errors
-
-- **Position PnL Tracking** - Detailed profit/loss breakdown
-  - `get_position_pnl()` - Get gross/net PnL, swap, commission breakdown
-  - `PositionPnL` model with cost analysis
-  - Real-time PnL monitoring capabilities
-
-- **Risk Validation** - Automated pre-trade risk checks
-  - `validate_trade_risk()` - Validate trades against risk parameters
-  - Configurable risk limits (max % of equity, margin usage)
-  - Detailed validation results with warnings
-
-- **Margin Monitoring** - Real-time margin tracking
-  - `subscribe_margin_events()` - Monitor margin changes in real-time
-  - `get_margin_calls()` - Retrieve margin call history
-  - `MarginCall` model for margin call tracking
-  - Example: `examples/margin_and_risk_management.py`
-
-#### Trade History & Reporting
-- **Deal History Retrieval** - Access executed trade history
-  - `HistoryAPI` class for trade history and reporting
-  - `get_deals()` - Retrieve deal history with flexible time ranges
-  - `get_deals_by_position()` - Track all executions for a specific position
-  - Support for date range and last N days queries
-
-- **Performance Analytics** - Automated trading performance metrics
-  - `get_performance_summary()` - Calculate win rate, profit factor, statistics
-  - Metrics: total deals, wins/losses, avg win/loss, profit factor
-  - Symbol-based performance breakdown
-  - Time-based analysis (daily, hourly)
-
-- **Order Details** - Detailed order information retrieval
-  - `get_order_details()` - Get comprehensive order information
-  - Position lifecycle tracking
-  - Example: `examples/trade_history_and_reporting.py` with tax reporting
-
-### Enhanced
-
-#### Streaming Infrastructure
-- All stream classes now support reconnect recovery via stream registry
-- Bounded queues with backpressure handling for all streams
-- Configurable queue sizes per stream type
-- Consistent async context manager pattern across all streams
-
-#### Model Enhancements
-- Added 7 new model classes: `DepthQuote`, `DepthSnapshot`, `MarginInfo`, `PositionPnL`, `MarginCall`
-- All models include formatting helpers and datetime conversion
-- Full type hints and comprehensive docstrings
-
-#### Client Integration
-- Added `client.risk` - Risk management API
-- Added `client.history` - Trade history API
-- Seamless integration with existing client architecture
-- Proper cleanup and teardown in disconnect flow
-
-#### Documentation
-- Complete API reference documentation (`docs/API_REFERENCE.md`)
-- 4 new comprehensive example files
-- 24+ usage examples covering all new features
-- Updated README with feature overview and quick start guides
-
-#### Testing
-- Added 43 unit tests covering all new models and calculations
-- Tests for edge cases (empty data, zero values, etc.)
-- Integration test placeholders for live testing
-- All tests passing
-
-### Planned
-- WebSocket transport option
-- Token refresh and multi-account support
-- Symbol categories and asset classes
-- Advanced order types enhancements
-- Position hedging support
-- Circuit breaker pattern
-- Performance benchmarks

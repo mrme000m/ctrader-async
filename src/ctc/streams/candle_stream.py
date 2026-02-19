@@ -91,140 +91,176 @@ class CandleStream:
         try:
             from ..messages.OpenApiMessages_pb2 import (
                 ProtoOASubscribeLiveTrendbarReq,
-                ProtoOASubscribeLiveTrendbarRes,
+                ProtoOALiveTrendbarEvent,
             )
-            from ..messages.OpenApiModelMessages_pb2 import ProtoOATrendbar
-            
+            from ..transport import ProtocolFraming
+
             # Get symbol ID
             symbol_info = await self.symbols.get_symbol(self.symbol)
             if not symbol_info:
                 raise ValueError(f"Symbol not found: {self.symbol}")
-            
+
             self._symbol_id = symbol_info.id
-            
-            # Register handler for trendbar events
-            def trendbar_handler(msg):
-                # Check if this is a ProtoOATrendbar or a response
-                if isinstance(msg, ProtoOATrendbar):
-                    # This is a trendbar update
-                    if hasattr(msg, 'symbolId') and msg.symbolId == self._symbol_id:
-                        # Check if period matches
-                        msg_period = getattr(msg, 'period', None)
-                        if msg_period == self.timeframe.value:
-                            try:
-                                candle = self._parse_trendbar(msg, symbol_info)
-                                if candle and self._active:
-                                    try:
-                                        self._queue.put_nowait(candle)
-                                    except asyncio.QueueFull:
-                                        logger.warning(f"Candle queue full for {self.symbol}, dropping update")
-                            except Exception as e:
-                                logger.error(f"Error parsing trendbar: {e}", exc_info=True)
-            
-            # Add handler for trendbar updates
-            self.protocol.add_handler(ProtoOATrendbar, trendbar_handler)
-            
+            self._symbol_info = symbol_info
+
+            # Register handler using the dispatcher API (same pattern as TickStream)
+            _sentinel = ProtoOALiveTrendbarEvent()
+            self._payload_type = _sentinel.payloadType
+
+            self.protocol.dispatcher.register(
+                self._payload_type,
+                self._on_trendbar,
+            )
+
             # Send subscription request
             req = ProtoOASubscribeLiveTrendbarReq()
             req.ctidTraderAccountId = self.config.account_id
             req.symbolId = self._symbol_id
             req.period = self.timeframe.value
-            
-            response = await self.protocol.send_request(
+
+            await self.protocol.send_request(
                 req,
                 timeout=self.config.request_timeout,
-                request_type="SubscribeLiveTrendbar"
+                request_type="SubscribeLiveTrendbar",
             )
-            
+
             self._subscribed = True
             logger.info(f"Subscribed to live candles for {self.symbol} {self.timeframe.name}")
-        
+
         except Exception as e:
             logger.error(f"Failed to subscribe to live candles: {e}", exc_info=True)
             raise
-    
+
     async def _unsubscribe(self):
         """Unsubscribe from live candle updates."""
         if not self._subscribed:
             return
-        
+
         try:
             from ..messages.OpenApiMessages_pb2 import (
                 ProtoOAUnsubscribeLiveTrendbarReq,
-                ProtoOAUnsubscribeLiveTrendbarRes,
             )
-            from ..messages.OpenApiModelMessages_pb2 import ProtoOATrendbar
-            
-            # Remove handler
-            self.protocol.remove_handler(ProtoOATrendbar)
-            
+
+            # Unregister dispatcher handler
+            self.protocol.dispatcher.unregister(
+                self._payload_type,
+                self._on_trendbar,
+            )
+
             # Send unsubscribe request
             req = ProtoOAUnsubscribeLiveTrendbarReq()
             req.ctidTraderAccountId = self.config.account_id
             req.symbolId = self._symbol_id
-            
+
             await self.protocol.send_request(
                 req,
                 timeout=self.config.request_timeout,
-                request_type="UnsubscribeLiveTrendbar"
+                request_type="UnsubscribeLiveTrendbar",
             )
-            
+
             self._subscribed = False
             logger.info(f"Unsubscribed from live candles for {self.symbol}")
-        
+
         except Exception as e:
             logger.error(f"Failed to unsubscribe from live candles: {e}", exc_info=True)
-    
+
+    async def _on_trendbar(self, envelope):
+        """Handle incoming ProtoOALiveTrendbarEvent."""
+        try:
+            from ..transport import ProtocolFraming
+            payload = ProtocolFraming.extract_payload(envelope)
+
+            # Filter for our symbol and period
+            if getattr(payload, "symbolId", None) != self._symbol_id:
+                return
+            trendbar = getattr(payload, "trendbar", None)
+            if trendbar is None:
+                return
+            if getattr(trendbar, "period", None) != self.timeframe.value:
+                return
+
+            candle = self._parse_trendbar(trendbar, self._symbol_info)
+            if candle and self._active:
+                try:
+                    self._queue.put_nowait(candle)
+                except asyncio.QueueFull:
+                    # Drop oldest, keep latest
+                    try:
+                        self._queue.get_nowait()
+                        self._queue.task_done()
+                    except asyncio.QueueEmpty:
+                        pass
+                    try:
+                        self._queue.put_nowait(candle)
+                    except asyncio.QueueFull:
+                        logger.warning(f"Candle queue full for {self.symbol}, dropping update")
+        except Exception as e:
+            logger.error(f"Error processing trendbar event: {e}", exc_info=True)
+
     def _parse_trendbar(self, trendbar, symbol_info) -> Candle:
-        """Parse trendbar into Candle.
-        
+        """Parse trendbar into Candle using correct delta encoding.
+
+        The cTrader protocol stores trendbar prices as:
+          low  = absolute price * 10^digits
+          open = low + delta_open
+          high = low + delta_high
+          close= low + delta_close
+
         Args:
-            trendbar: ProtoOATrendbar message
+            trendbar: ProtoOATrendbar message (from LiveTrendbarEvent)
             symbol_info: Symbol information
-            
+
         Returns:
             Candle object
         """
-        # Get the scale for price conversion
-        scale = 10 ** symbol_info.digits
-        
-        # Parse OHLC prices
-        open_price = getattr(trendbar, 'open', None)
-        high_price = getattr(trendbar, 'high', None)
-        low_price = getattr(trendbar, 'low', None)
-        close_price = getattr(trendbar, 'close', None)
-        
-        # Convert from protocol units to actual prices
-        open_val = open_price / scale if open_price else None
-        high_val = high_price / scale if high_price else None
-        low_val = low_price / scale if low_price else None
-        close_val = close_price / scale if close_price else None
-        
-        # Parse volume
-        volume = getattr(trendbar, 'volume', None)
-        
-        # Parse timestamp (UTC timestamp in milliseconds)
-        timestamp = getattr(trendbar, 'utcTimestampInMinutes', None)
-        if timestamp:
-            # Convert from minutes to milliseconds
-            timestamp = timestamp * 60 * 1000
-        
+        scale = 10 ** int(symbol_info.digits)
+
+        # low is the absolute baseline; open/high/close are deltas above low
+        raw_low   = getattr(trendbar, "low",   None)
+        raw_open  = getattr(trendbar, "deltaOpen",  None)
+        raw_high  = getattr(trendbar, "deltaHigh",  None)
+        raw_close = getattr(trendbar, "deltaClose", None)
+
+        if raw_low is None:
+            return None
+
+        low_val   = raw_low / scale
+        open_val  = (raw_low + (raw_open  or 0)) / scale
+        high_val  = (raw_low + (raw_high  or 0)) / scale
+        close_val = (raw_low + (raw_close or 0)) / scale
+
+        volume = getattr(trendbar, "volume", 0) or 0
+
+        # utcTimestampInMinutes → datetime (UTC)
+        ts_minutes = getattr(trendbar, "utcTimestampInMinutes", None)
+        from datetime import datetime, timezone
+        if ts_minutes:
+            ts_dt = datetime.fromtimestamp(int(ts_minutes) * 60, tz=timezone.utc)
+        else:
+            ts_dt = datetime.now(tz=timezone.utc)
+
         return Candle(
-            timestamp=timestamp,
+            timestamp=ts_dt,
             open=open_val,
             high=high_val,
             low=low_val,
             close=close_val,
-            volume=volume,
+            volume=int(volume),
             symbol_name=self.symbol,
-            timeframe=self.timeframe.name
+            timeframe=self.timeframe.name,
         )
-    
-    async def resubscribe(self):
-        """Resubscribe after reconnection."""
-        if self._active:
-            self._subscribed = False
-            await self._subscribe()
+
+    async def resubscribe(self, protocol, symbols) -> None:
+        """Resubscribe after reconnect (best-effort, matching StreamRegistry protocol)."""
+        if not self._subscribed:
+            return
+        try:
+            await self._unsubscribe()
+        except Exception:
+            pass
+        self.protocol = protocol
+        self.symbols = symbols
+        await self._subscribe()
     
     def __aiter__(self):
         """Return async iterator."""

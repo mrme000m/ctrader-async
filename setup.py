@@ -21,6 +21,8 @@ setup(
     url="https://github.com/yourusername/ctrader-async",
     packages=find_packages(where="src", exclude=["tests", "tests.*", "examples", "examples.*", "**/__pycache__*", "**/*.pyc"]),
     package_dir={"": "src"},
+    include_package_data=True,
+    package_data={"ctc": ["py.typed"]},
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",

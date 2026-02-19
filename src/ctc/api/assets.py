@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import Dict, Optional, TYPE_CHECKING
 
-from ..models import Asset
+from ..models import Asset, AssetClass
 
 if TYPE_CHECKING:
     from ..protocol import ProtocolHandler
@@ -70,3 +70,60 @@ class AssetCatalog:
             await self.load()
         async with self._lock:
             return list(self._assets_by_id.values())
+    
+    async def get_asset_classes(self) -> list[AssetClass]:
+        """Get list of all asset classes.
+        
+        Asset classes group assets by type (e.g., Currencies, Commodities,
+        Indices, Stocks, Cryptocurrencies).
+        
+        Returns:
+            List of AssetClass objects
+            
+        Example:
+            >>> classes = await client.assets.get_asset_classes()
+            >>> for asset_class in classes:
+            ...     print(f"{asset_class.name}: {len(asset_class.asset_ids)} assets")
+        """
+        from ..messages.OpenApiMessages_pb2 import (
+            ProtoOAAssetClassListReq,
+            ProtoOAAssetClassListRes,
+        )
+        
+        # Build request
+        req = ProtoOAAssetClassListReq()
+        req.ctidTraderAccountId = self.config.account_id
+        
+        # Send request
+        res = await self.protocol.send_request(
+            req,
+            timeout=self.config.request_timeout,
+            request_type="AssetClassList",
+        )
+        
+        if not isinstance(res, ProtoOAAssetClassListRes):
+            raise ValueError(f"Unexpected response type: {type(res)}")
+        
+        # Parse asset classes
+        classes = []
+        if hasattr(res, 'assetClass'):
+            for ac in res.assetClass:
+                asset_class_id = getattr(ac, 'id', None)
+                name = getattr(ac, 'name', None)
+                
+                if asset_class_id is None or name is None:
+                    continue
+                
+                # Get asset IDs in this class
+                asset_ids = []
+                if hasattr(ac, 'assetId'):
+                    asset_ids = list(ac.assetId)
+                
+                classes.append(AssetClass(
+                    id=asset_class_id,
+                    name=name,
+                    asset_ids=asset_ids
+                ))
+        
+        logger.info("Retrieved %s asset classes", len(classes))
+        return classes

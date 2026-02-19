@@ -33,7 +33,9 @@ class TickStream:
         protocol: ProtocolHandler,
         config: ClientConfig,
         symbols: SymbolCatalog,
-        symbol: str
+        symbol: str,
+        *,
+        subscribe_to_timestamp: bool = False,
     ):
         """Initialize tick stream.
         
@@ -47,6 +49,7 @@ class TickStream:
         self.config = config
         self.symbols = symbols
         self.symbol = symbol
+        self.subscribe_to_timestamp = bool(subscribe_to_timestamp)
         
         # Bounded queue for backpressure (prevents unbounded memory growth)
         maxsize = getattr(config, "tick_queue_size", 1000)
@@ -107,6 +110,7 @@ class TickStream:
             req = ProtoOASubscribeSpotsReq()
             req.ctidTraderAccountId = self.config.account_id
             req.symbolId.append(self._symbol_id)
+            req.subscribeToSpotTimestamp = self.subscribe_to_timestamp
             
             await self.protocol.send_request(
                 req,

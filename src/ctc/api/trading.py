@@ -1315,6 +1315,164 @@ class TradingAPI:
         orders = await self.get_orders()
         await self.cancel_orders_bulk([o.id for o in orders])
     
+    async def get_orders_by_position(self, position_id: int) -> list[Order]:
+        """Get all orders associated with a specific position.
+        
+        Retrieves pending orders that are linked to a position (such as
+        SL/TP orders or pending entry orders for the same position).
+        
+        Args:
+            position_id: Position identifier
+            
+        Returns:
+            List of Order objects
+            
+        Example:
+            >>> orders = await client.trading.get_orders_by_position(123456)
+            >>> for order in orders:
+            ...     print(f"Order {order.id}: {order.order_type} {order.volume} lots")
+        """
+        from ..messages.OpenApiMessages_pb2 import (
+            ProtoOAOrderListByPositionIdReq,
+            ProtoOAOrderListByPositionIdRes,
+        )
+        
+        await self._rate_limiter.acquire()
+        
+        try:
+            # Build request
+            req = ProtoOAOrderListByPositionIdReq()
+            req.ctidTraderAccountId = self.config.account_id
+            req.positionId = position_id
+            
+            # Send request
+            response = await self.protocol.send_request(
+                req,
+                timeout=self.config.request_timeout,
+                request_type="OrderListByPositionId"
+            )
+            
+            if not isinstance(response, ProtoOAOrderListByPositionIdRes):
+                raise ValueError(f"Unexpected response type: {type(response)}")
+            
+            # Parse orders
+            orders = []
+            if hasattr(response, 'order'):
+                for order_proto in response.order:
+                    symbol_id = getattr(order_proto, 'tradeData', {}).get('symbolId', None) if hasattr(order_proto, 'tradeData') else None
+                    
+                    # Get symbol info
+                    symbol_info = None
+                    if symbol_id:
+                        symbol_info = await self.symbols.get_symbol_by_id(symbol_id)
+                    
+                    order = self._parse_order(order_proto, symbol_info)
+                    orders.append(order)
+            
+            logger.info(f"Retrieved {len(orders)} orders for position {position_id}")
+            return orders
+        
+        except Exception as e:
+            logger.error(f"Failed to get orders by position: {e}", exc_info=True)
+            return []
+    
+    async def list_all_orders(
+        self,
+        from_timestamp: Optional[int] = None,
+        to_timestamp: Optional[int] = None,
+        max_rows: int = 1000
+    ) -> list[Order]:
+        """Get historical orders within a time range.
+        
+        Retrieves a list of all orders (filled, cancelled, rejected, etc.)
+        within the specified time period. This is different from get_orders()
+        which only returns currently pending orders.
+        
+        Args:
+            from_timestamp: Start time in milliseconds (optional)
+            to_timestamp: End time in milliseconds (optional)
+            max_rows: Maximum number of orders to return (default: 1000)
+            
+        Returns:
+            List of Order objects
+            
+        Example:
+            >>> # Get orders from last 7 days
+            >>> from_ts = int((datetime.now() - timedelta(days=7)).timestamp() * 1000)
+            >>> to_ts = int(datetime.now().timestamp() * 1000)
+            >>> orders = await client.trading.list_all_orders(from_timestamp=from_ts, to_timestamp=to_ts)
+            >>> 
+            >>> # Count filled vs cancelled
+            >>> filled = [o for o in orders if o.status == "FILLED"]
+            >>> cancelled = [o for o in orders if o.status == "CANCELLED"]
+            >>> print(f"Filled: {len(filled)}, Cancelled: {len(cancelled)}")
+        """
+        from ..messages.OpenApiMessages_pb2 import (
+            ProtoOAOrderListReq,
+            ProtoOAOrderListRes,
+        )
+        
+        await self._rate_limiter.acquire()
+        
+        try:
+            # Default to last 30 days if no timestamps provided
+            if from_timestamp is None:
+                from datetime import datetime, timezone, timedelta
+                to_timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
+                from_timestamp = int((datetime.now(timezone.utc) - timedelta(days=30)).timestamp() * 1000)
+            
+            orders = []
+            has_more = True
+            
+            # Pagination loop
+            while has_more and len(orders) < max_rows:
+                # Build request
+                req = ProtoOAOrderListReq()
+                req.ctidTraderAccountId = self.config.account_id
+                req.fromTimestamp = from_timestamp
+                req.toTimestamp = to_timestamp
+                req.maxRows = min(100, max_rows - len(orders))  # Request in chunks
+                
+                # Send request
+                response = await self.protocol.send_request(
+                    req,
+                    timeout=self.config.request_timeout,
+                    request_type="OrderList"
+                )
+                
+                if not isinstance(response, ProtoOAOrderListRes):
+                    raise ValueError(f"Unexpected response type: {type(response)}")
+                
+                # Parse orders
+                if hasattr(response, 'order'):
+                    for order_proto in response.order:
+                        symbol_id = getattr(order_proto, 'tradeData', {}).get('symbolId', None) if hasattr(order_proto, 'tradeData') else None
+                        
+                        # Get symbol info
+                        symbol_info = None
+                        if symbol_id:
+                            symbol_info = await self.symbols.get_symbol_by_id(symbol_id)
+                        
+                        order = self._parse_order(order_proto, symbol_info)
+                        orders.append(order)
+                
+                # Check for more data
+                has_more = getattr(response, 'hasMore', False)
+                if has_more and orders:
+                    # Update fromTimestamp to get next page
+                    last_order = orders[-1]
+                    if last_order.create_timestamp:
+                        from_timestamp = last_order.create_timestamp + 1
+                    else:
+                        break
+            
+            logger.info(f"Retrieved {len(orders)} historical orders")
+            return orders[:max_rows]
+        
+        except Exception as e:
+            logger.error(f"Failed to list orders: {e}", exc_info=True)
+            return []
+    
     def _parse_position(self, pos_data: any, symbol_info: Optional[any]) -> Position:
         """Parse position from protobuf data."""
         from ..enums import TradeSide

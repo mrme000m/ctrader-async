@@ -210,3 +210,133 @@ class SessionAPI:
         # Note: Actual reconnect logic would need to be triggered
         # For now, we just update the config
         return True
+    
+    async def refresh_token(self, refresh_token: str) -> dict:
+        """Refresh an expired OAuth access token via the protobuf API.
+
+        Uses ``ProtoOARefreshTokenReq`` to obtain a new access token without
+        going through the full OAuth redirect flow. Important for long-running
+        bots where the initial access token expires.
+
+        Args:
+            refresh_token: The OAuth refresh token received during initial auth
+
+        Returns:
+            Dict with keys: ``access_token``, ``refresh_token``,
+            ``expires_in``, ``token_type``
+
+        Example:
+            >>> tokens = await client.session.refresh_token(my_refresh_token)
+            >>> # Update client config with new token
+            >>> client.config.access_token = tokens['access_token']
+        """
+        from ..messages.OpenApiMessages_pb2 import (
+            ProtoOARefreshTokenReq,
+            ProtoOARefreshTokenRes,
+        )
+
+        req = ProtoOARefreshTokenReq()
+        req.refreshToken = refresh_token
+
+        response = await self.protocol.send_request(
+            req,
+            timeout=self.config.request_timeout,
+            request_type="RefreshToken",
+        )
+
+        if not isinstance(response, ProtoOARefreshTokenRes):
+            raise ValueError(f"Unexpected response type: {type(response)}")
+
+        result = {
+            "access_token": getattr(response, "accessToken", ""),
+            "refresh_token": getattr(response, "refreshToken", ""),
+            "expires_in": getattr(response, "expiresIn", 0),
+            "token_type": getattr(response, "tokenType", "Bearer"),
+        }
+
+        logger.info("Access token refreshed successfully")
+        return result
+
+    async def get_ctid_profile(self) -> dict:
+        """Get the cTID user profile for the current access token.
+
+        Uses ``ProtoOAGetCtidProfileByTokenReq`` to retrieve user identity
+        information associated with the OAuth access token. Useful for
+        multi-user applications to identify which cTID account is connected.
+
+        Returns:
+            Dict with keys: ``user_id``, ``nickname``, ``email``,
+            ``first_name``, ``last_name``, ``phone``, ``gender``,
+            ``preferred_lang``, ``utm_source``
+
+        Example:
+            >>> profile = await client.session.get_ctid_profile()
+            >>> print(f"Connected as: {profile['nickname']} ({profile['email']})")
+        """
+        from ..messages.OpenApiMessages_pb2 import (
+            ProtoOAGetCtidProfileByTokenReq,
+            ProtoOAGetCtidProfileByTokenRes,
+        )
+
+        req = ProtoOAGetCtidProfileByTokenReq()
+        req.accessToken = self.config.access_token
+
+        response = await self.protocol.send_request(
+            req,
+            timeout=self.config.request_timeout,
+            request_type="GetCtidProfileByToken",
+        )
+
+        if not isinstance(response, ProtoOAGetCtidProfileByTokenRes):
+            raise ValueError(f"Unexpected response type: {type(response)}")
+
+        profile_proto = getattr(response, "profile", None)
+        if profile_proto is None:
+            raise ValueError("No profile in response")
+
+        result = {
+            "user_id": getattr(profile_proto, "userId", None),
+            "nickname": getattr(profile_proto, "nickname", ""),
+            "email": getattr(profile_proto, "email", ""),
+            "first_name": getattr(profile_proto, "firstName", ""),
+            "last_name": getattr(profile_proto, "lastName", ""),
+            "phone": getattr(profile_proto, "phone", ""),
+            "gender": getattr(profile_proto, "gender", ""),
+            "preferred_lang": getattr(profile_proto, "preferredLang", ""),
+            "utm_source": getattr(profile_proto, "utmSource", ""),
+        }
+
+        logger.info(f"Retrieved cTID profile for user_id={result['user_id']}")
+        return result
+
+    async def get_server_version(self) -> str:
+        """Get the cTrader Open API server version.
+        
+        Returns:
+            Server version string (e.g., "168")
+            
+        Example:
+            >>> version = await client.session.get_server_version()
+            >>> print(f"Server version: {version}")
+        """
+        from ..messages.OpenApiMessages_pb2 import (
+            ProtoOAVersionReq,
+            ProtoOAVersionRes,
+        )
+        
+        # Build request
+        req = ProtoOAVersionReq()
+        
+        # Send request
+        response = await self.protocol.send_request(
+            req,
+            timeout=self.config.request_timeout,
+            request_type="Version"
+        )
+        
+        if not isinstance(response, ProtoOAVersionRes):
+            raise ValueError(f"Unexpected response type: {type(response)}")
+        
+        version = getattr(response, 'version', 'unknown')
+        logger.info(f"Server version: {version}")
+        return version

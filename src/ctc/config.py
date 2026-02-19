@@ -64,10 +64,22 @@ class ClientConfig:
     # Logging
     log_level: str = "INFO"
     log_messages: bool = False  # Log all protobuf messages (debug)
+    log_format: str = "plain"  # "plain" or "json"
+    configure_logging: bool = False  # if True, client configures root logger
     
     # Advanced
     heartbeat_interval: float = 30.0  # Send heartbeat every N seconds
     message_max_size: int = 10 * 1024 * 1024  # 10MB max message size
+
+    # Connection watchdog
+    stale_connection_timeout: Optional[float] = None  # None => auto (heartbeat_interval * 3)
+    watchdog_check_interval: float = 5.0
+
+    # Token auto-refresh
+    refresh_token: Optional[str] = None
+    token_auto_refresh_enabled: bool = False
+    token_refresh_margin_seconds: float = 60.0
+    token_refresh_default_expires_in: int = 3600
 
     # Performance / backpressure
     inbound_queue_size: int = 1000  # max inbound messages buffered before processing
@@ -128,10 +140,18 @@ class ClientConfig:
             rate_limit_historical=get_env("RATE_LIMIT_HISTORICAL", 5, int),
             log_level=get_env("LOG_LEVEL", "INFO"),
             log_messages=get_env("LOG_MESSAGES", False, bool),
+            log_format=get_env("LOG_FORMAT", "plain"),
+            configure_logging=get_env("CONFIGURE_LOGGING", False, bool),
             inbound_queue_size=get_env("INBOUND_QUEUE_SIZE", 1000, int),
             inbound_workers=get_env("INBOUND_WORKERS", 1, int),
             drop_inbound_when_full=get_env("DROP_INBOUND_WHEN_FULL", False, bool),
             tick_queue_size=get_env("TICK_QUEUE_SIZE", 1000, int),
+            stale_connection_timeout=get_env("STALE_CONNECTION_TIMEOUT", None, float),
+            watchdog_check_interval=get_env("WATCHDOG_CHECK_INTERVAL", 5.0, float),
+            refresh_token=get_env("REFRESH_TOKEN", None),
+            token_auto_refresh_enabled=get_env("TOKEN_AUTO_REFRESH_ENABLED", False, bool),
+            token_refresh_margin_seconds=get_env("TOKEN_REFRESH_MARGIN_SECONDS", 60.0, float),
+            token_refresh_default_expires_in=get_env("TOKEN_REFRESH_DEFAULT_EXPIRES_IN", 3600, int),
         )
     
     @classmethod
