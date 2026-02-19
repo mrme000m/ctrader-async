@@ -50,10 +50,16 @@ class MarketDataAPI:
         self.config = config
         self.symbols = symbols
         self._client = client
-        # Separate rate limiter for historical data (lower limit than trading)
-        self._rate_limiter = TokenBucketRateLimiter(
+        # Separate rate limiters: historical data has lower limits than trading operations
+        # Historical data: 5 req/s per connection (per spec)
+        self._historical_rate_limiter = TokenBucketRateLimiter(
             rate=config.rate_limit_historical,
             capacity=config.rate_limit_historical,
+        )
+        # Trading/non-historical operations: 50 req/s per connection (per spec)
+        self._trading_rate_limiter = TokenBucketRateLimiter(
+            rate=config.rate_limit_trading,
+            capacity=config.rate_limit_trading,
         )
     
     async def get_candles(
@@ -76,7 +82,8 @@ class MarketDataAPI:
         Returns:
             List of candles
         """
-        await self._rate_limiter.acquire()
+        # Historical data requests use lower rate limit (5 req/s)
+        await self._historical_rate_limiter.acquire()
         try:
             from ..messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq
             from ..enums import to_proto_timeframe
@@ -277,7 +284,8 @@ class MarketDataAPI:
             >>> for tick in ticks:
             ...     print(f"{tick['timestamp']}: {tick['price']}")
         """
-        await self._rate_limiter.acquire()
+        # Historical tick data uses lower rate limit (5 req/s)
+        await self._historical_rate_limiter.acquire()
         try:
             from ..messages.OpenApiMessages_pb2 import ProtoOAGetTickDataReq
             from ..messages.OpenApiModelMessages_pb2 import ProtoOAQuoteType
@@ -337,18 +345,32 @@ class MarketDataAPI:
             raise
 
     def _parse_candle(self, bar: any, symbol_info: any, timeframe: TimeFrame) -> Candle:
-        """Parse candle from protobuf data."""
-        # cTrader uses deltas for OHLC
-        scale = 100000.0
-        base = (bar.low or 0) / scale
-        
+        """Parse candle from protobuf data.
+
+        ProtoOATrendbar fields:
+          low                 (int64)  — absolute low price * 10^digits
+          deltaOpen           (uint32) — open - low (in same units)
+          deltaHigh           (uint32) — high - low (in same units)
+          deltaClose          (uint32) — close - low (in same units)
+          volume              (uint64) — tick volume
+          utcTimestampInMinutes (uint32)
+          period              (ProtoOATrendbarPeriod enum)
+
+        Scale = 10^digits (NOT hardcoded 100000).
+        """
+        scale = 10 ** int(symbol_info.digits)
+        raw_low = int(getattr(bar, 'low', 0) or 0)
+        base = raw_low / scale
+
         return Candle(
-            timestamp=datetime.fromtimestamp(bar.utcTimestampInMinutes * 60, tz=timezone.utc),
-            open=round(base + (getattr(bar, 'deltaOpen', 0) / scale), symbol_info.digits),
-            high=round(base + (getattr(bar, 'deltaHigh', 0) / scale), symbol_info.digits),
+            timestamp=datetime.fromtimestamp(
+                int(bar.utcTimestampInMinutes) * 60, tz=timezone.utc
+            ),
+            open=round(base + int(getattr(bar, 'deltaOpen', 0) or 0) / scale, symbol_info.digits),
+            high=round(base + int(getattr(bar, 'deltaHigh', 0) or 0) / scale, symbol_info.digits),
             low=round(base, symbol_info.digits),
-            close=round(base + (getattr(bar, 'deltaClose', 0) / scale), symbol_info.digits),
-            volume=getattr(bar, 'volume', 0),
+            close=round(base + int(getattr(bar, 'deltaClose', 0) or 0) / scale, symbol_info.digits),
+            volume=int(getattr(bar, 'volume', 0) or 0),
             symbol_name=symbol_info.name,
             timeframe=timeframe.name,
         )

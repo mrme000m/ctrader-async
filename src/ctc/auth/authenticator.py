@@ -309,6 +309,21 @@ class Authenticator:
         """
         return getattr(response, 'description', None) or str(getattr(response, 'errorCode', 'Unknown error'))
     
+    @staticmethod
+    def _get_retry_after(response: any) -> Optional[int]:
+        """Extract retryAfter from error response (for rate limiting).
+        
+        Args:
+            response: Error response message
+            
+        Returns:
+            Seconds to wait before retry, or None if not specified
+        """
+        retry_after = getattr(response, 'retryAfter', None)
+        if retry_after is not None and retry_after > 0:
+            return int(retry_after)
+        return None
+    
     def reset(self):
         """Reset authentication state."""
         self.state = AuthState()

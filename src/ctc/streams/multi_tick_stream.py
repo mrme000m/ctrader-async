@@ -56,6 +56,7 @@ class MultiTickStream:
         self._subscribed = False
 
         self._symbol_ids: dict[int, str] = {}
+        self._symbol_digits: dict[int, int] = {}  # symbol_id -> digits for price scaling
         self._latest_by_symbol: dict[int, Tick] = {}
         self._flush_task: asyncio.Task | None = None
         self._flush_event = asyncio.Event()
@@ -106,12 +107,14 @@ class MultiTickStream:
     async def _subscribe(self) -> None:
         from ..messages.OpenApiMessages_pb2 import ProtoOASubscribeSpotsReq, ProtoOASpotEvent
 
-        # Resolve ids for all symbols
+        # Resolve ids for all symbols — store digits for correct price scaling
         for name in self.symbol_names:
             info = await self.symbols.get_symbol(name)
             if not info:
                 raise ValueError(f"Symbol not found: {name}")
-            self._symbol_ids[int(info.id)] = info.name
+            sid = int(info.id)
+            self._symbol_ids[sid] = info.name
+            self._symbol_digits[sid] = int(info.digits) if info.digits else 5
 
         # Register one handler for all spot events
         self.protocol.dispatcher.register(ProtoOASpotEvent().payloadType, self._on_spot)
@@ -176,11 +179,17 @@ class MultiTickStream:
         if sid not in self._symbol_ids:
             return
 
+        # ProtoOASpotEvent.bid/ask are uint64 integers scaled by 10^digits
+        digits = self._symbol_digits.get(sid, 5)
+        scale = 10 ** digits
+        raw_bid = int(getattr(payload, "bid", 0) or 0)
+        raw_ask = int(getattr(payload, "ask", 0) or 0)
+
         tick = Tick(
             symbol_id=sid,
             symbol_name=self._symbol_ids.get(sid, str(sid)),
-            bid=getattr(payload, "bid", 0) / 100000.0,
-            ask=getattr(payload, "ask", 0) / 100000.0,
+            bid=raw_bid / scale if raw_bid else 0.0,
+            ask=raw_ask / scale if raw_ask else 0.0,
             timestamp=getattr(payload, "timestamp", 0),
         )
 

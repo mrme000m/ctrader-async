@@ -56,3 +56,5 @@ Thumbs.db
 *.log
 tradingview-webhooks-ctc-bot
 Audit*
+brv/*
+.brv/*

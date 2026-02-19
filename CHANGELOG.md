@@ -91,6 +91,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `kwargs` scope bug in `client.connect()` method
 - Fixed incorrect method name in `validate_trade_risk()` (now uses `get_full_account_info()`)
 - Fixed event handler import casing for `ProtoOATrailingSLChangedEvent`
+- **Protocol heartbeat** - Added explicit `ProtoHeartbeatEvent` sending in `ProtocolHandler._heartbeat_loop()`
+- **Rate limiting** - Fixed `MarketDataAPI` to use separate rate limiters:
+  - `_historical_rate_limiter` (5 req/s) for historical data requests
+  - `_trading_rate_limiter` (50 req/s) for streaming/subscription operations
+- **Token invalidation** - Enhanced `on_token_invalidated()` handler to trigger automatic re-authentication when account token is invalidated
+- **Margin event extractors** - Fixed margin event handlers to use `ProtocolFraming.extract_payload()` instead of non-existent `self._protobuf.extract()`
+- **Error handling** - Added `Authenticator._get_retry_after()` method to extract rate limit retry delays from error responses
 - All identified gaps from audit documents now addressed
 
 ---

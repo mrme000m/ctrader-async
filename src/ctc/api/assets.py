@@ -114,15 +114,12 @@ class AssetCatalog:
                 if asset_class_id is None or name is None:
                     continue
                 
-                # Get asset IDs in this class
-                asset_ids = []
-                if hasattr(ac, 'assetId'):
-                    asset_ids = list(ac.assetId)
-                
+                # ProtoOAAssetClass only has 'id' and 'name' — no assetId repeated field.
+                # asset_ids would need to be resolved via symbol.baseAsset/quoteAsset cross-ref.
                 classes.append(AssetClass(
                     id=asset_class_id,
                     name=name,
-                    asset_ids=asset_ids
+                    asset_ids=[],  # not available directly from ProtoOAAssetClass
                 ))
         
         logger.info("Retrieved %s asset classes", len(classes))

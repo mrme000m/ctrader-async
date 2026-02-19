@@ -620,6 +620,33 @@ class CTraderClient:
                 f"Server sent ProtoOAAccountsTokenInvalidatedEvent "
                 f"— token invalidated for accounts {account_ids}: {reason}"
             )
+            
+            # Trigger re-authentication if our account is affected
+            if self.config.account_id in account_ids:
+                logger.warning(f"Our account {self.config.account_id} token invalidated, triggering re-auth")
+                try:
+                    # Use token auto-refresh if available
+                    if self._should_enable_token_auto_refresh():
+                        refresh_tok = getattr(self.config, "refresh_token", None)
+                        if refresh_tok and self.session:
+                            tokens = await self.session.refresh_token(refresh_tok)
+                            new_access_token = str(tokens.get("access_token", "") or "")
+                            if new_access_token:
+                                self.config.access_token = new_access_token
+                                new_refresh_token = str(tokens.get("refresh_token", "") or "")
+                                if new_refresh_token:
+                                    self.config.refresh_token = new_refresh_token
+                                await self._reauth_account_with_current_token()
+                                logger.info("Token refreshed and account re-authenticated after invalidation")
+                    else:
+                        # Fall back to triggering a reconnect
+                        await self.events.emit("auth.reauth_required", {
+                            "account_ids": account_ids,
+                            "reason": reason,
+                        })
+                except Exception as e:
+                    logger.error(f"Failed to re-authenticate after token invalidation: {e}")
+            
             await self.events.emit("auth.token_invalidated", {
                 "account_ids": account_ids,
                 "reason": reason,
@@ -645,7 +672,7 @@ class CTraderClient:
 
         async def on_margin_changed(envelope):
             try:
-                payload = self._protobuf.extract(envelope)
+                payload = ProtocolFraming.extract_payload(envelope)
                 money_digits = getattr(payload, "moneyDigits", 2)
                 divisor = 10 ** money_digits
                 await self.events.emit("risk.margin_changed", {
@@ -659,7 +686,7 @@ class CTraderClient:
 
         async def on_margin_call_update(envelope):
             try:
-                payload = self._protobuf.extract(envelope)
+                payload = ProtocolFraming.extract_payload(envelope)
                 money_digits = getattr(payload, "moneyDigits", 2)
                 divisor = 10 ** money_digits
                 await self.events.emit("risk.margin_call_update", {
@@ -675,7 +702,7 @@ class CTraderClient:
 
         async def on_margin_call_trigger(envelope):
             try:
-                payload = self._protobuf.extract(envelope)
+                payload = ProtocolFraming.extract_payload(envelope)
                 money_digits = getattr(payload, "moneyDigits", 2)
                 divisor = 10 ** money_digits
                 await self.events.emit("risk.margin_call_trigger", {

@@ -99,7 +99,8 @@ class TickStream:
                 raise ValueError(f"Symbol not found: {self.symbol}")
             
             self._symbol_id = symbol_info.id
-            
+            self._symbol_info = symbol_info  # store for price scaling in _on_tick
+
             # Register handler for spot events
             self.protocol.dispatcher.register(
                 ProtoOASpotEvent().payloadType,
@@ -185,12 +186,19 @@ class TickStream:
             if payload.symbolId != self._symbol_id:
                 return
             
-            # Create tick object
+            # ProtoOASpotEvent.bid / .ask are uint64 integers scaled by 10^digits.
+            # Use the symbol's digit count (default 5) for correct price scaling.
+            sym_info = getattr(self, '_symbol_info', None)
+            digits = int(sym_info.digits) if sym_info and sym_info.digits else 5
+            scale = 10 ** digits
+            raw_bid = int(getattr(payload, 'bid', 0) or 0)
+            raw_ask = int(getattr(payload, 'ask', 0) or 0)
+
             tick = Tick(
                 symbol_id=payload.symbolId,
                 symbol_name=self.symbol,
-                bid=getattr(payload, 'bid', 0) / 100000.0,
-                ask=getattr(payload, 'ask', 0) / 100000.0,
+                bid=raw_bid / scale if raw_bid else 0.0,
+                ask=raw_ask / scale if raw_ask else 0.0,
                 timestamp=getattr(payload, 'timestamp', 0),
             )
             

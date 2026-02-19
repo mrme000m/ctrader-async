@@ -73,13 +73,14 @@ A modern, pure Python asyncio client library for the cTrader Open API. This libr
 ✅ **Backpressure** - Bounded queues with drop policies
 
 ### Infrastructure
-✅ **Rate Limiting** - Token bucket algorithm for API limits  
+✅ **Rate Limiting** - Token bucket algorithm for API limits (5 req/s historical, 50 req/s trading)  
 ✅ **Circuit Breaker** - Failure detection and recovery  
 ✅ **Retry Logic** - Exponential backoff with jitter  
 ✅ **Metrics** - Built-in request/response metrics  
 ✅ **Hooks** - Extension points for custom logic  
 ✅ **Logging** - Structured logging (plain or JSON)  
 ✅ **Watchdog** - Stale connection detection  
+✅ **Heartbeat** - Protocol-level keepalive messages  
 
 ## Installation
 
@@ -333,6 +334,8 @@ Runtime events emitted by these features:
 - `client.connection_stale`
 - `auth.token_refreshed`
 - `auth.token_refresh_failed`
+- `auth.token_invalidated`
+- `protocol.heartbeat_sent`
 
 ## Streaming Market Data
 

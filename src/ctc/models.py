@@ -208,6 +208,12 @@ class Order:
     client_order_id: Optional[str] = None
     label: Optional[str] = None
     comment: Optional[str] = None
+    # Fields from ProtoOAOrder not in original model
+    order_status: Optional[str] = None   # ProtoOAOrderStatus enum name
+    execution_price: Optional[float] = None  # filled price (proto double)
+    closing_order: Optional[bool] = None  # True if this closes a position
+    is_stop_out: Optional[bool] = None   # True if triggered by stop-out
+    position_id: Optional[int] = None    # associated position ID
     
     @property
     def expiration_datetime(self) -> Optional[datetime]:

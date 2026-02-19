@@ -66,12 +66,14 @@ class ProtocolHandler:
         self._worker_tasks: list[asyncio.Task] = []
 
         self._receive_task: Optional[asyncio.Task] = None
+        self._heartbeat_task: Optional[asyncio.Task] = None
         self._stopped = False
+        self._heartbeat_interval = float(getattr(config, "heartbeat_interval", 30.0)) if config else 30.0
     
     async def start(self):
         """Start the protocol handler.
         
-        This starts the correlator and message receive loop.
+        This starts the correlator, message receive loop, and heartbeat.
         """
         await self.correlator.start()
 
@@ -83,6 +85,9 @@ class ProtocolHandler:
         ]
         self._receive_task = asyncio.create_task(self._receive_loop())
         
+        # Start heartbeat task to keep connection alive
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        
         logger.info("Protocol handler started")
     
     async def stop(self):
@@ -92,6 +97,15 @@ class ProtocolHandler:
         """
         self._stopped = True
         
+        # Cancel heartbeat task
+        if self._heartbeat_task and not self._heartbeat_task.done():
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
+        self._heartbeat_task = None
+
         # Cancel receive task
         if self._receive_task and not self._receive_task.done():
             self._receive_task.cancel()
@@ -344,6 +358,50 @@ class ProtocolHandler:
             Number of pending requests
         """
         return self.correlator.get_pending_count()
+    
+    async def _heartbeat_loop(self):
+        """Send periodic heartbeat events to keep connection alive.
+        
+        The cTrader server expects periodic ProtoHeartbeatEvent messages
+        to maintain the connection. If no heartbeat is received within
+        the expected timeframe, the server may disconnect the client.
+        """
+        try:
+            from ..messages.OpenApiCommonMessages_pb2 import ProtoHeartbeatEvent
+            
+            logger.debug(f"Heartbeat loop started (interval={self._heartbeat_interval}s)")
+            
+            while not self._stopped:
+                try:
+                    # Wait for the heartbeat interval
+                    await asyncio.sleep(self._heartbeat_interval)
+                    
+                    if self._stopped:
+                        break
+                    
+                    # Send heartbeat if still connected
+                    if self.transport.is_connected():
+                        heartbeat = ProtoHeartbeatEvent()
+                        await self.send_message(heartbeat)
+                        logger.debug("Sent heartbeat")
+                        
+                        # Emit event for monitoring
+                        try:
+                            await self.events.emit("protocol.heartbeat_sent", {})
+                        except Exception:
+                            pass
+                    
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    if not self._stopped:
+                        logger.warning(f"Heartbeat send failed: {e}")
+                    
+        except asyncio.CancelledError:
+            logger.debug("Heartbeat loop cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Heartbeat loop error: {e}", exc_info=True)
     
     def __repr__(self) -> str:
         """String representation."""

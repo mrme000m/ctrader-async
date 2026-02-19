@@ -92,50 +92,54 @@ class DepthStream:
         await self._unsubscribe()
     
     async def _subscribe(self):
-        """Subscribe to depth quote updates."""
+        """Subscribe to depth quote updates.
+
+        ProtoOASubscribeDepthQuotesReq fields: ctidTraderAccountId, symbolId
+        (no 'depth' field — the server sends all available levels).
+
+        ProtoOADepthEvent fields: ctidTraderAccountId, symbolId,
+            newQuotes (repeated ProtoOADepthQuote), deletedQuotes (repeated uint64)
+
+        ProtoOADepthQuote fields: id, size, bid, ask
+            bid/ask are prices (double); size is volume (uint64 in protocol units).
+            A quote with bid>0 is a bid-side quote; ask>0 is an ask-side quote.
+        """
         try:
             from ..messages.OpenApiMessages_pb2 import (
                 ProtoOASubscribeDepthQuotesReq,
                 ProtoOADepthEvent,
             )
-            
+
             # Get symbol ID
             symbol_info = await self.symbols.get_symbol(self.symbol)
             if not symbol_info:
                 raise ValueError(f"Symbol not found: {self.symbol}")
-            
+
             self._symbol_id = symbol_info.id
-            
-            # Register handler for depth events
-            def depth_handler(msg):
-                if hasattr(msg, 'symbolId') and msg.symbolId == self._symbol_id:
-                    try:
-                        snapshot = self._parse_depth_event(msg, symbol_info)
-                        if snapshot and self._active:
-                            try:
-                                self._queue.put_nowait(snapshot)
-                            except asyncio.QueueFull:
-                                logger.warning(f"Depth queue full for {self.symbol}, dropping update")
-                    except Exception as e:
-                        logger.error(f"Error parsing depth event: {e}", exc_info=True)
-            
-            self.protocol.add_handler(ProtoOADepthEvent, depth_handler)
-            
+            self._symbol_info = symbol_info
+
+            # Register handler via dispatcher (same API as TickStream/CandleStream)
+            self._depth_payload_type = ProtoOADepthEvent().payloadType
+            self.protocol.dispatcher.register(
+                self._depth_payload_type,
+                self._on_depth_event,
+            )
+
             # Send subscription request
+            # NOTE: ProtoOASubscribeDepthQuotesReq has no 'depth' field
             req = ProtoOASubscribeDepthQuotesReq()
             req.ctidTraderAccountId = self.config.account_id
-            req.symbolId = self._symbol_id
-            req.depth = self.depth
-            
-            response = await self.protocol.send_request(
+            req.symbolId.append(self._symbol_id)
+
+            await self.protocol.send_request(
                 req,
                 timeout=self.config.request_timeout,
-                request_type="SubscribeDepthQuotes"
+                request_type="SubscribeDepthQuotes",
             )
-            
+
             self._subscribed = True
-            logger.info(f"Subscribed to depth quotes for {self.symbol} (depth={self.depth})")
-        
+            logger.info(f"Subscribed to depth quotes for {self.symbol}")
+
         except Exception as e:
             logger.error(f"Failed to subscribe to depth quotes: {e}", exc_info=True)
             raise
@@ -144,85 +148,125 @@ class DepthStream:
         """Unsubscribe from depth quote updates."""
         if not self._subscribed:
             return
-        
+
         try:
-            from ..messages.OpenApiMessages_pb2 import (
-                ProtoOAUnsubscribeDepthQuotesReq,
-                ProtoOADepthEvent,
-            )
-            
-            # Remove handler
-            self.protocol.remove_handler(ProtoOADepthEvent)
-            
+            from ..messages.OpenApiMessages_pb2 import ProtoOAUnsubscribeDepthQuotesReq
+
+            # Unregister dispatcher handler
+            if hasattr(self, '_depth_payload_type'):
+                self.protocol.dispatcher.unregister(
+                    self._depth_payload_type,
+                    self._on_depth_event,
+                )
+
             # Send unsubscribe request
             req = ProtoOAUnsubscribeDepthQuotesReq()
             req.ctidTraderAccountId = self.config.account_id
-            req.symbolId = self._symbol_id
-            
+            req.symbolId.append(self._symbol_id)
+
             await self.protocol.send_request(
                 req,
                 timeout=self.config.request_timeout,
-                request_type="UnsubscribeDepthQuotes"
+                request_type="UnsubscribeDepthQuotes",
             )
-            
+
             self._subscribed = False
             logger.info(f"Unsubscribed from depth quotes for {self.symbol}")
-        
+
         except Exception as e:
             logger.error(f"Failed to unsubscribe from depth quotes: {e}", exc_info=True)
-    
-    def _parse_depth_event(self, event, symbol_info) -> DepthSnapshot:
+
+    def _has_quotes(self) -> bool:
+        """Return True if the order book has at least one bid or ask level."""
+        return bool(self._bids or self._asks)
+
+    async def _on_depth_event(self, envelope) -> None:
+        """Handle incoming ProtoOADepthEvent from dispatcher."""
+        try:
+            from ..transport import ProtocolFraming
+            payload = ProtocolFraming.extract_payload(envelope)
+
+            if int(getattr(payload, 'symbolId', 0)) != self._symbol_id:
+                return
+
+            snapshot = self._parse_depth_event(payload)
+            # Only enqueue if the order book has real quotes — the server
+            # typically sends an empty initial ProtoOADepthEvent to
+            # acknowledge the subscription before real quotes arrive.
+            if snapshot and self._active and self._has_quotes():
+                try:
+                    self._queue.put_nowait(snapshot)
+                except asyncio.QueueFull:
+                    # Drop oldest, keep latest
+                    try:
+                        self._queue.get_nowait()
+                        self._queue.task_done()
+                    except asyncio.QueueEmpty:
+                        pass
+                    try:
+                        self._queue.put_nowait(snapshot)
+                    except asyncio.QueueFull:
+                        logger.warning(f"Depth queue full for {self.symbol}, dropping update")
+        except Exception as e:
+            logger.error(f"Error processing depth event: {e}", exc_info=True)
+
+    def _parse_depth_event(self, event) -> DepthSnapshot:
         """Parse depth event into snapshot.
-        
-        The ProtoOADepthEvent contains incremental updates:
-        - newQuotes: New price levels added
-        - deletedQuotes: Quote IDs removed from the book
+
+        ProtoOADepthEvent incremental update structure:
+          newQuotes    (repeated ProtoOADepthQuote): new/updated levels
+          deletedQuotes (repeated uint64): quote IDs to remove
+
+        ProtoOADepthQuote fields:
+          id   (uint64) — unique quote identifier
+          size (uint64) — volume in protocol units (divide by lot_size to get lots)
+          bid  (double) — bid price (>0 when this is a bid-side level, else 0)
+          ask  (double) — ask price (>0 when this is an ask-side level, else 0)
+
+        NOTE: There is no 'price' or 'side' field. Bid/ask side is determined by
+        which price field is non-zero.
         """
         import time
-        
-        # Get the scale for price conversion
-        scale = 10 ** symbol_info.digits
-        
-        # Process new quotes
-        if hasattr(event, 'newQuotes'):
-            for quote in event.newQuotes:
-                quote_id = quote.id
-                price = quote.price / scale
-                volume = quote.size / 100_000_000  # Convert from protocol units to lots
-                side = "BUY" if quote.side == 1 else "ASK"  # 1=BUY, 2=ASK
-                
-                depth_quote = DepthQuote(
-                    id=quote_id,
-                    price=price,
-                    volume=volume,
-                    side=side
+
+        symbol_info = getattr(self, '_symbol_info', None)
+        lot_size_units = float(symbol_info.lot_size_units) if symbol_info and symbol_info.lot_size_units else 100_000.0
+
+        # Process new/updated quotes
+        for quote in list(getattr(event, 'newQuotes', []) or []):
+            quote_id = int(quote.id)
+            size_raw = int(getattr(quote, 'size', 0) or 0)
+            bid_price = float(getattr(quote, 'bid', 0.0) or 0.0)
+            ask_price = float(getattr(quote, 'ask', 0.0) or 0.0)
+
+            # volume: size is in protocol units (same unit as tradeData.volume)
+            volume = (float(size_raw) / 100.0) / lot_size_units if lot_size_units > 0 else 0.0
+
+            if bid_price > 0:
+                self._bids[quote_id] = DepthQuote(
+                    id=quote_id, price=bid_price, volume=volume, side="BID"
                 )
-                
-                if side == "BUY":
-                    self._bids[quote_id] = depth_quote
-                else:
-                    self._asks[quote_id] = depth_quote
-        
-        # Process deleted quotes
-        if hasattr(event, 'deletedQuotes'):
-            for quote_id in event.deletedQuotes:
-                self._bids.pop(quote_id, None)
                 self._asks.pop(quote_id, None)
-        
-        # Build snapshot
-        # Sort bids by price descending (best bid first)
+            elif ask_price > 0:
+                self._asks[quote_id] = DepthQuote(
+                    id=quote_id, price=ask_price, volume=volume, side="ASK"
+                )
+                self._bids.pop(quote_id, None)
+
+        # Process deleted quotes
+        for quote_id in list(getattr(event, 'deletedQuotes', []) or []):
+            self._bids.pop(int(quote_id), None)
+            self._asks.pop(int(quote_id), None)
+
+        # Build sorted snapshot (best bid first = highest price; best ask first = lowest price)
         bids = sorted(self._bids.values(), key=lambda q: q.price, reverse=True)
-        # Sort asks by price ascending (best ask first)
         asks = sorted(self._asks.values(), key=lambda q: q.price)
-        
-        timestamp = int(time.time() * 1000)
-        
+
         return DepthSnapshot(
             symbol_id=self._symbol_id,
             symbol_name=self.symbol,
             bids=bids,
             asks=asks,
-            timestamp=timestamp
+            timestamp=int(time.time() * 1000),
         )
     
     async def resubscribe(self):

@@ -1514,7 +1514,26 @@ class TradingAPI:
         )
     
     async def _parse_deal(self, deal_data: any) -> Deal:
-        """Parse a deal from protobuf data into `models.Deal`."""
+        """Parse a deal from protobuf data into `models.Deal`.
+
+        ProtoOADeal fields:
+          dealId, orderId, positionId, volume, filledVolume, symbolId,
+          createTimestamp, executionTimestamp, utcLastUpdateTimestamp,
+          executionPrice (double — already real price, no scaling),
+          tradeSide (ProtoOATradeSide enum int),
+          dealStatus (ProtoOADealStatus enum int),
+          marginRate (double), commission (int64, scaled by moneyDigits),
+          baseToUsdConversionRate (double),
+          closePositionDetail (ProtoOAClosePositionDetail),
+          moneyDigits (uint32)
+
+        ProtoOAClosePositionDetail fields:
+          entryPrice (double), grossProfit (int64), swap (int64),
+          commission (int64), balance (int64), closedVolume (int64),
+          moneyDigits (uint32), pnlConversionFee (int64)
+        """
+        from ..messages.OpenApiModelMessages_pb2 import ProtoOATradeSide as _TradeSide
+
         symbol_id = int(getattr(deal_data, "symbolId", 0) or 0) or None
         symbol_name = None
         symbol_info = None
@@ -1527,19 +1546,51 @@ class TradingAPI:
                 symbol_name = None
                 symbol_info = None
 
-        raw_vol = getattr(deal_data, "volume", None)
+        # filledVolume is the executed volume; fall back to volume if zero
+        raw_vol = int(getattr(deal_data, "filledVolume", 0) or 0) or int(getattr(deal_data, "volume", 0) or 0)
         lots = None
-        if isinstance(raw_vol, (int, float)) and symbol_info is not None:
+        if raw_vol and symbol_info is not None:
             try:
-                lots = float(symbol_info.protocol_volume_to_lots(int(raw_vol)))
+                lots = float(symbol_info.protocol_volume_to_lots(raw_vol))
             except Exception:
-                lots = None
-        elif isinstance(raw_vol, (int, float)):
-            # Fallback heuristic used elsewhere in this repo: proto volume ~ cents => lots ~ volume/100.
+                lots = float(raw_vol) / 100.0
+        elif raw_vol:
             lots = float(raw_vol) / 100.0
 
+        # tradeSide is an enum int — use Name() to get string
+        trade_side_val = getattr(deal_data, "tradeSide", None)
+        side = None
+        if trade_side_val is not None:
+            try:
+                side = _TradeSide.Name(int(trade_side_val))
+            except Exception:
+                side = str(trade_side_val)
+
+        # executionPrice is a proto double — already the real price
+        exec_price = getattr(deal_data, "executionPrice", None)
+        execution_price = float(exec_price) if exec_price else None
+
+        # commission is int64 scaled by moneyDigits (often negative = broker charge)
+        money_digits = int(getattr(deal_data, "moneyDigits", 2) or 2)
+        divisor = 10 ** money_digits
+        commission_raw = int(getattr(deal_data, "commission", 0) or 0)
+        commission = float(commission_raw) / divisor  # negative = cost to trader
+
+        # PnL and swap from closePositionDetail (only on closing deals)
+        pnl = 0.0
+        swap = 0.0
+        try:
+            if deal_data.HasField("closePositionDetail"):
+                cpd = deal_data.closePositionDetail
+                cpd_digits = int(getattr(cpd, "moneyDigits", money_digits) or money_digits)
+                cpd_div = 10 ** cpd_digits
+                pnl = float(getattr(cpd, "grossProfit", 0) or 0) / cpd_div
+                swap = float(getattr(cpd, "swap", 0) or 0) / cpd_div
+        except Exception:
+            pass
+
         ts = getattr(deal_data, "executionTimestamp", None)
-        if ts is None:
+        if not ts:
             ts = getattr(deal_data, "createTimestamp", None)
 
         return Deal(
@@ -1548,15 +1599,12 @@ class TradingAPI:
             position_id=(int(getattr(deal_data, "positionId", 0) or 0) or None),
             symbol_id=symbol_id,
             symbol_name=(str(symbol_name) if symbol_name else None),
-            side=str(getattr(deal_data, "tradeSide", "")) or None,
+            side=side,
             volume=lots,
-            execution_price=(
-                float(getattr(deal_data, "executionPrice", 0.0) or 0.0)
-                if getattr(deal_data, "executionPrice", None) is not None
-                else None
-            ),
-            commission=float(getattr(deal_data, "commission", 0.0) or 0.0),
-            swap=float(getattr(deal_data, "swap", 0.0) or 0.0),
+            execution_price=execution_price,
+            commission=commission,
+            swap=swap,
+            pnl=pnl,
             timestamp=(int(ts) if isinstance(ts, (int, float)) else None),
         )
 
@@ -1570,17 +1618,49 @@ class TradingAPI:
             if symbol_info else order_data.tradeData.volume / 100.0
         )
         
+        def _float_or_none(val) -> Optional[float]:
+            """Return float if non-zero, else None (proto doubles default to 0.0)."""
+            try:
+                f = float(val)
+                return f if f != 0.0 else None
+            except (TypeError, ValueError):
+                return None
+
+        # orderType / orderStatus are enum ints — use Name()
+        from ..messages.OpenApiModelMessages_pb2 import ProtoOAOrderType, ProtoOAOrderStatus
+        order_type_val = getattr(order_data, 'orderType', None)
+        order_status_val = getattr(order_data, 'orderStatus', None)
+        try:
+            order_type_str = ProtoOAOrderType.Name(int(order_type_val)) if order_type_val is not None else None
+        except Exception:
+            order_type_str = str(order_type_val)
+        try:
+            order_status_str = ProtoOAOrderStatus.Name(int(order_status_val)) if order_status_val is not None else None
+        except Exception:
+            order_status_str = str(order_status_val)
+
+        # executionPrice is a proto double on ProtoOAOrder — already real price
+        exec_price = _float_or_none(getattr(order_data, 'executionPrice', None))
+
         return Order(
             id=order_data.orderId,
             symbol_id=order_data.tradeData.symbolId,
             symbol_name=symbol_info.name if symbol_info else None,
             volume=volume_lots,
             side=TradeSide.from_proto(ProtoOATradeSide, order_data.tradeData.tradeSide).name,
-            limit_price=getattr(order_data, 'limitPrice', None),
-            stop_price=getattr(order_data, 'stopPrice', None),
-            stop_loss=getattr(order_data, 'stopLoss', None),
-            take_profit=getattr(order_data, 'takeProfit', None),
-            client_order_id=getattr(order_data, 'clientOrderId', None),
+            order_type=order_type_str,
+            order_status=order_status_str,
+            limit_price=_float_or_none(getattr(order_data, 'limitPrice', None)),
+            stop_price=_float_or_none(getattr(order_data, 'stopPrice', None)),
+            stop_loss=_float_or_none(getattr(order_data, 'stopLoss', None)),
+            take_profit=_float_or_none(getattr(order_data, 'takeProfit', None)),
+            execution_price=exec_price,
+            client_order_id=getattr(order_data, 'clientOrderId', None) or None,
+            expiration_timestamp=getattr(order_data, 'expirationTimestamp', None) or None,
+            position_id=getattr(order_data, 'positionId', None) or None,
+            closing_order=bool(getattr(order_data, 'closingOrder', False)),
+            is_stop_out=bool(getattr(order_data, 'isStopOut', False)),
+            last_update_timestamp=getattr(order_data, 'utcLastUpdateTimestamp', None) or None,
         )
     
     async def _find_position_by_id(self, position_id: int) -> Optional[Position]:

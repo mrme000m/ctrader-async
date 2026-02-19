@@ -1222,6 +1222,17 @@ except SymbolNotFoundError as e:
     print(f"Symbol not found: {e}")
 ```
 
+### Rate Limit Error Handling
+
+When rate limits are exceeded, the server may include a `retryAfter` field in the error response indicating how many seconds to wait before retrying:
+
+```python
+except RateLimitError as e:
+    # e.retry_after contains the recommended wait time in seconds
+    print(f"Rate limited, waiting {e.retry_after}s before retry...")
+    await asyncio.sleep(e.retry_after)
+```
+
 ---
 
 ## Configuration
@@ -1251,8 +1262,11 @@ config = ClientConfig(
     reconnect_max_attempts=10,
     
     # Rate limiting
-    rate_limit_trading=50,
-    rate_limit_historical=5,
+    rate_limit_trading=50,      # Non-historical requests (subscriptions, trading)
+    rate_limit_historical=5,    # Historical data requests (candles, tick data)
+    
+    # Heartbeat
+    heartbeat_interval=30.0,    # Protocol-level heartbeat interval
     
     # WebSocket
     websocket_ping_interval=20.0,

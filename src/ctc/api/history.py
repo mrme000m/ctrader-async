@@ -553,9 +553,14 @@ class HistoryAPI:
             ProtoOAOrderListByPositionIdRes,
         )
 
+        # ProtoOAOrderListByPositionIdReq requires fromTimestamp and toTimestamp
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
         req = ProtoOAOrderListByPositionIdReq()
         req.ctidTraderAccountId = self.config.account_id
         req.positionId = int(position_id)
+        req.fromTimestamp = 0          # epoch = include all history
+        req.toTimestamp = now_ms
 
         response = await self.protocol.send_request(
             req,
