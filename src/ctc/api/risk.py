@@ -201,26 +201,43 @@ class RiskAPI:
         
         # Parse response
         money_digits = getattr(response, 'moneyDigits', None) or 2
-        margin_value = getattr(response, 'margin', None)
-        
-        if margin_value is None:
+        divisor = 10 ** money_digits
+
+        # cTrader returns repeated ProtoOAExpectedMargin entries in response.margin,
+        # one per requested volume. This API requests one volume, but we still
+        # handle matching by volume defensively.
+        margin_entries = list(getattr(response, 'margin', []))
+        if not margin_entries:
             raise ValueError("No margin value in response")
-        
-        # Convert from protocol units to actual currency
-        margin = margin_value / (10 ** money_digits)
-        
-        # Handle buy/sell specific margins if available
-        buy_margin = None
-        sell_margin = None
-        if hasattr(response, 'buyMargin'):
-            buy_margins = list(response.buyMargin)
-            if buy_margins:
-                buy_margin = buy_margins[0] / (10 ** money_digits)
-        
-        if hasattr(response, 'sellMargin'):
-            sell_margins = list(response.sellMargin)
-            if sell_margins:
-                sell_margin = sell_margins[0] / (10 ** money_digits)
+
+        selected_entry = next(
+            (m for m in margin_entries if getattr(m, 'volume', None) == volume_proto),
+            margin_entries[0],
+        )
+
+        buy_margin_raw = getattr(selected_entry, 'buyMargin', None)
+        sell_margin_raw = getattr(selected_entry, 'sellMargin', None)
+
+        buy_margin = (
+            float(buy_margin_raw) / divisor if buy_margin_raw is not None else None
+        )
+        sell_margin = (
+            float(sell_margin_raw) / divisor if sell_margin_raw is not None else None
+        )
+
+        side = (order_type or '').upper()
+        if side == 'BUY' and buy_margin is not None:
+            margin = buy_margin
+        elif side == 'SELL' and sell_margin is not None:
+            margin = sell_margin
+        elif buy_margin is not None and sell_margin is not None:
+            margin = max(buy_margin, sell_margin)
+        elif buy_margin is not None:
+            margin = buy_margin
+        elif sell_margin is not None:
+            margin = sell_margin
+        else:
+            raise ValueError("No buy/sell margin value in response")
         
         return MarginInfo(
             margin=margin,
