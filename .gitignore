@@ -58,3 +58,9 @@ tradingview-webhooks-ctc-bot
 Audit*
 brv/*
 .brv/*
+.mcp.json
+agent-context.rules
+CLAUDE.md
+CTC_CLIENT_ISSUES_TO_FIX.md
+image.png
+verify_fixes.py
