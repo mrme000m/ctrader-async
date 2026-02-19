@@ -356,6 +356,5 @@ class SymbolCatalog:
             guaranteed_stop_loss=getattr(symbol_data, 'guaranteedStopLoss', None),
             swap_long=getattr(symbol_data, 'swapLong', None),
             swap_short=getattr(symbol_data, 'swapShort', None),
-            leverage=getattr(symbol_data, 'leverage', None),
-            margin_rate=getattr(symbol_data, 'marginRate', None),
+            leverage_id=getattr(symbol_data, 'leverageId', None) or None,
         )

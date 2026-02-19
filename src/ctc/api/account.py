@@ -243,6 +243,12 @@ class AccountAPI:
                 except Exception:
                     account_type = None
 
+                # Leverage: leverageInCents is 100x the actual leverage (e.g. 20000 = 1:200)
+                leverage = None
+                leverage_in_cents = getattr(trader, 'leverageInCents', None)
+                if leverage_in_cents:
+                    leverage = float(leverage_in_cents) / 100.0
+
                 self._cached_info = AccountInfo(
                     account_id=self.config.account_id,
                     balance=trader.balance / divisor,
@@ -251,8 +257,9 @@ class AccountAPI:
                     free_margin=trader.balance / divisor,
                     money_digits=money_digits,
                     account_type=account_type,
+                    leverage=leverage,
                 )
-                
+
                 return self._cached_info
             
             raise ValueError("No trader data in response")
@@ -326,12 +333,14 @@ class AccountAPI:
             except Exception:
                 pass
             
-            # Get position data to calculate totals
+            # Get position data to calculate totals.
+            # ProtoOAPosition has a usedMargin field (in money units with moneyDigits)
+            # which is the authoritative per-position margin from the server.
             total_unrealized_pnl = 0.0
             total_swap = 0.0
             total_commission = 0.0
             total_margin = 0.0
-            
+
             try:
                 if self._client and hasattr(self._client, 'trading'):
                     positions = await self._client.trading.get_positions()
@@ -339,31 +348,30 @@ class AccountAPI:
                         total_unrealized_pnl += getattr(pos, 'pnl_net_unrealized', 0.0)
                         total_swap += getattr(pos, 'swap', 0.0)
                         total_commission += getattr(pos, 'commission', 0.0)
+                        # usedMargin is already converted to float in the Position model
+                        total_margin += getattr(pos, 'used_margin', 0.0) or 0.0
             except Exception as e:
                 logger.debug(f"Could not fetch position data: {e}")
-            
+
             # Calculate equity and margin metrics
             balance = trader.balance / divisor
             equity = balance + total_unrealized_pnl
-            
-            # Get used margin from trader data if available, otherwise estimate
-            if hasattr(trader, 'marginUsed'):
-                total_margin = trader.marginUsed / divisor
-            
-            # Calculate free margin
+
+            # Free margin = equity − used margin
             free_margin = equity - total_margin
-            
-            # Calculate margin level
+
+            # Margin level: only meaningful when there are open positions
             margin_level = None
             if total_margin > 0:
                 margin_level = (equity / total_margin) * 100.0
-            
-            # Leverage
+
+            # Leverage: leverageInCents is 100× the actual leverage value
+            # (e.g. 20000 → 1:200).  The ProtoOATrader message does NOT have a
+            # plain `leverage` field — only `leverageInCents`.
             leverage = None
-            if hasattr(trader, 'leverageInCents'):
-                leverage = trader.leverageInCents / 100.0
-            elif hasattr(trader, 'leverage'):
-                leverage = float(trader.leverage)
+            leverage_in_cents = getattr(trader, 'leverageInCents', None)
+            if leverage_in_cents:
+                leverage = float(leverage_in_cents) / 100.0
             
             self._cached_full_info = FullAccountInfo(
                 account_id=self.config.account_id,
@@ -415,17 +423,22 @@ class AccountAPI:
             }
         """
         info = await self.get_full_account_info()
-        
+
         # Determine if account can trade
         can_trade = info.free_margin > 0 and (info.margin_level is None or info.margin_level > 100)
-        
+
         return {
-            'margin_level': info.margin_level,
-            'free_margin': info.free_margin,
-            'used_margin': info.margin,
+            'balance': info.balance,
             'equity': info.equity,
+            'margin_used': info.margin,
+            'margin_free': info.free_margin,
+            'margin_level': info.margin_level,
+            'used_margin': info.margin,   # alias kept for compatibility
+            'free_margin': info.free_margin,  # alias kept for compatibility
+            'margin_call_level': None,    # broker-specific; not available via ProtoOATrader
+            'stop_out_level': None,       # broker-specific; not available via ProtoOATrader
             'margin_call_risk': info.margin_call_risk,
-            'can_trade': can_trade
+            'can_trade': can_trade,
         }
     
     async def get_cash_flow_history(

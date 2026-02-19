@@ -1477,23 +1477,40 @@ class TradingAPI:
         """Parse position from protobuf data."""
         from ..enums import TradeSide
         from ..messages.OpenApiModelMessages_pb2 import ProtoOATradeSide
-        
+
         volume_lots = (
             symbol_info.protocol_volume_to_lots(pos_data.tradeData.volume)
             if symbol_info else pos_data.tradeData.volume / 100.0
         )
-        
+
+        # Money fields use moneyDigits for proper decimal scaling.
+        # ProtoOAPosition carries: swap, commission, usedMargin — all in
+        # (10^moneyDigits) integer units matching the deposit currency.
+        money_digits = getattr(pos_data, 'moneyDigits', None) or 2
+        divisor = 10 ** money_digits
+
+        swap_raw = getattr(pos_data, 'swap', 0) or 0
+        commission_raw = getattr(pos_data, 'commission', 0) or 0
+        used_margin_raw = getattr(pos_data, 'usedMargin', None)
+
+        swap = float(swap_raw) / divisor
+        commission = float(commission_raw) / divisor
+        used_margin = float(used_margin_raw) / divisor if used_margin_raw is not None else None
+
         return Position(
             id=pos_data.positionId,
             symbol_id=pos_data.tradeData.symbolId,
             symbol_name=symbol_info.name if symbol_info else None,
             volume=volume_lots,
             side=TradeSide.from_proto(ProtoOATradeSide, pos_data.tradeData.tradeSide).name,
-            # `price` is the open price for positions in ProtoOAPosition
+            # `price` is the weighted-average open price for the position
             entry_price=float(getattr(pos_data, 'price', 0.0)),
             stop_loss=(float(getattr(pos_data, 'stopLoss', 0.0)) if getattr(pos_data, 'stopLoss', 0) else None),
             take_profit=(float(getattr(pos_data, 'takeProfit', 0.0)) if getattr(pos_data, 'takeProfit', 0) else None),
             last_update_timestamp=(int(getattr(pos_data, 'utcLastUpdateTimestamp', 0)) or None),
+            swap=swap,
+            commission=commission,
+            used_margin=used_margin,
         )
     
     async def _parse_deal(self, deal_data: any) -> Deal:

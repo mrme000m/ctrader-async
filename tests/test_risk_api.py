@@ -4,7 +4,11 @@ Tests for Risk Management API.
 
 import pytest
 from datetime import datetime
+from types import SimpleNamespace
+
 from ctc.models import MarginInfo, PositionPnL, MarginCall
+from ctc.api.risk import RiskAPI
+from ctc.messages.OpenApiMessages_pb2 import ProtoOAExpectedMarginRes
 
 
 class TestMarginInfo:
@@ -294,6 +298,93 @@ class TestRiskValidation:
         
         assert validation['risk_acceptable'] is False
         assert validation['risk_percent'] > 2.0
+
+
+class _DummyProtocol:
+    def __init__(self, response):
+        self._response = response
+
+    async def send_request(self, req, **kwargs):
+        return self._response
+
+
+class _DummySymbolInfo:
+    id = 1001
+
+    def lots_to_protocol_volume(self, volume: float) -> int:
+        return int(round(volume * 100000))
+
+
+class _DummySymbols:
+    async def get_symbol(self, symbol: str):
+        return _DummySymbolInfo()
+
+
+class _DummyAccountAPI:
+    async def get_full_account_info(self):
+        return SimpleNamespace(free_margin=10000.0, equity=100000.0)
+
+
+class _DummyClient:
+    def __init__(self):
+        self.account = _DummyAccountAPI()
+
+
+class TestExpectedMarginParsing:
+    @staticmethod
+    def _build_response(volume: int, buy_margin: int, sell_margin: int) -> ProtoOAExpectedMarginRes:
+        response = ProtoOAExpectedMarginRes()
+        response.moneyDigits = 2
+        entry = response.margin.add()
+        entry.volume = volume
+        entry.buyMargin = buy_margin
+        entry.sellMargin = sell_margin
+        return response
+
+    @pytest.mark.asyncio
+    async def test_expected_margin_uses_repeated_margin_entries(self):
+        response = self._build_response(volume=100000, buy_margin=12345, sell_margin=13000)
+        api = RiskAPI(
+            protocol=_DummyProtocol(response),
+            config=SimpleNamespace(account_id=1, request_timeout=1.0),
+            symbols=_DummySymbols(),
+        )
+
+        margin = await api.get_expected_margin("EURUSD", 1.0, "BUY")
+
+        assert margin.margin == 123.45
+        assert margin.buy_margin == 123.45
+        assert margin.sell_margin == 130.0
+
+    @pytest.mark.asyncio
+    async def test_expected_margin_defaults_to_conservative_without_side(self):
+        response = self._build_response(volume=100000, buy_margin=10000, sell_margin=15000)
+        api = RiskAPI(
+            protocol=_DummyProtocol(response),
+            config=SimpleNamespace(account_id=1, request_timeout=1.0),
+            symbols=_DummySymbols(),
+        )
+
+        margin = await api.get_expected_margin("EURUSD", 1.0)
+
+        assert margin.margin == 150.0
+
+    @pytest.mark.asyncio
+    async def test_validate_trade_risk_no_margin_container_type_error(self):
+        response = self._build_response(volume=100000, buy_margin=5000, sell_margin=5500)
+        api = RiskAPI(
+            protocol=_DummyProtocol(response),
+            config=SimpleNamespace(account_id=1, request_timeout=1.0),
+            symbols=_DummySymbols(),
+            client=_DummyClient(),
+        )
+
+        result = await api.validate_trade_risk("EURUSD", 1.0, "BUY", max_risk_percent=10.0)
+
+        assert result["margin_required"] == 50.0
+        assert result["margin_available"] == 10000.0
+        assert result["warnings"] == []
+        assert result["valid"] is True
 
 
 if __name__ == "__main__":

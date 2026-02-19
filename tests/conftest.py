@@ -48,11 +48,13 @@ _INTEGRATION_FILES = {
 }
 
 
-def pytest_ignore_collect(collection_path, config):
-    """Ignore integration test files when CTRADER_RUN_INTEGRATION is not set."""
-    if not _INTEGRATION_ENABLED and Path(collection_path).name in _INTEGRATION_FILES:
-        return True
-    return None
+if not _INTEGRATION_ENABLED:
+    # collect_ignore_glob is read by pytest before any collection starts and
+    # prevents the listed files from being imported at all — the only reliable
+    # way to stop async tests with long timeouts from blocking the unit run.
+    collect_ignore_glob = [str(_HERE / f) for f in _INTEGRATION_FILES]
+else:
+    collect_ignore_glob = []
 
 
 @pytest_asyncio.fixture

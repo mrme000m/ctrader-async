@@ -56,8 +56,10 @@ class Symbol:
     guaranteed_stop_loss: Optional[bool] = None
     swap_long: Optional[float] = None
     swap_short: Optional[float] = None
-    leverage: Optional[float] = None
-    margin_rate: Optional[float] = None
+    leverage_id: Optional[int] = None  # ID referencing ProtoOADynamicLeverage
+    # NOTE: ProtoOASymbol has no static leverage or marginRate field;
+    # effective leverage comes from the account (leverageInCents) and
+    # dynamic leverage tiers fetched via leverageId.
     
     @property
     def lot_size_units(self) -> float:
@@ -137,6 +139,7 @@ class Position:
     commission: float = 0.0
     pnl_gross_unrealized: float = 0.0
     pnl_net_unrealized: float = 0.0
+    used_margin: Optional[float] = None  # Margin used by this position (account currency)
     status: Optional[str] = None
     open_timestamp: Optional[int] = None
     last_update_timestamp: Optional[int] = None

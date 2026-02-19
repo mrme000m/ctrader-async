@@ -442,51 +442,85 @@ class RiskAPI:
         symbol_info = await self.symbols.get_symbol(symbol)
         if not symbol_info:
             raise ValueError(f"Symbol not found: {symbol}")
-        
-        # Build request
+
+        # ProtoOAGetDynamicLeverageByIDReq requires leverageId from the symbol,
+        # NOT the symbolId. Get full symbol details to ensure leverageId is available.
+        leverage_id = getattr(symbol_info, 'leverage_id', None)
+        if leverage_id is None:
+            # Try fetching full symbol details from server which includes leverageId
+            try:
+                full_sym = await self.symbols.get_symbol_details_by_id(symbol_info.id)
+                if full_sym:
+                    leverage_id = getattr(full_sym, 'leverage_id', None)
+            except Exception:
+                pass
+
+        if not leverage_id:
+            logger.warning(f"Symbol {symbol} has no leverageId — dynamic leverage not available")
+            return None
+
+        # Build request using the dynamic leverage schedule ID
         req = ProtoOAGetDynamicLeverageByIDReq()
         req.ctidTraderAccountId = self.config.account_id
-        req.symbolId = symbol_info.id
-        
+        req.leverageId = leverage_id
+
         # Send request
         response = await self.protocol.send_request(
             req,
             timeout=self.config.request_timeout,
             request_type="DynamicLeverage"
         )
-        
+
         if not isinstance(response, ProtoOAGetDynamicLeverageByIDRes):
             raise ValueError(f"Unexpected response type: {type(response)}")
-        
-        # Check if dynamic leverage data exists
-        if not hasattr(response, 'dynamicLeverage') or not response.dynamicLeverage:
+
+        # response.leverage is a single ProtoOADynamicLeverage message with .tiers
+        dyn_lev_proto = getattr(response, 'leverage', None)
+        if not dyn_lev_proto:
             return None
-        
-        # Parse tiers
+
+        proto_tiers = list(getattr(dyn_lev_proto, 'tiers', []) or [])
+        if not proto_tiers:
+            return None
+
+        # Each tier has:
+        #   volume  - cumulative upper bound in protocol units (100 = 1 lot for standard)
+        #             The last tier has no upper bound (treat as unlimited).
+        #   leverage - leverage value (integer, e.g. 500 = 1:500)
+        # We convert sequential cumulative volumes to [volume_from, volume_to] ranges.
+        lot_size_units = symbol_info.lot_size_units  # e.g. 100_000 for standard forex
+
         tiers = []
-        for i, tier_data in enumerate(response.dynamicLeverage):
-            volume_from = getattr(tier_data, 'volumeFrom', 0) / 100.0  # Convert from cents
-            volume_to_raw = getattr(tier_data, 'volumeTo', None)
-            volume_to = volume_to_raw / 100.0 if volume_to_raw else None
-            leverage = getattr(tier_data, 'leverage', 100) / 100.0  # Convert from cents
-            
+        volume_from_proto = 0
+        for i, tier_proto in enumerate(proto_tiers):
+            volume_to_proto = getattr(tier_proto, 'volume', None)
+            # tier leverage is stored in centi-units (100× actual), e.g. 20000 → 1:200
+            tier_leverage = float(getattr(tier_proto, 'leverage', 10000)) / 100.0
+
+            # Convert protocol units → lots
+            volume_from_lots = (float(volume_from_proto) / 100.0) / lot_size_units if lot_size_units > 0 else 0.0
+
+            is_last = (i == len(proto_tiers) - 1)
+            if is_last or not volume_to_proto:
+                volume_to_lots = None
+            else:
+                volume_to_lots = (float(volume_to_proto) / 100.0) / lot_size_units if lot_size_units > 0 else None
+
             tiers.append(LeverageTier(
                 tier_id=i + 1,
-                volume_from=volume_from,
-                volume_to=volume_to,
-                leverage=leverage
+                volume_from=volume_from_lots,
+                volume_to=volume_to_lots,
+                leverage=tier_leverage
             ))
-        
-        # Get total volume if available
-        total_volume = 0.0
-        if hasattr(response, 'totalVolume'):
-            total_volume = response.totalVolume / 100.0
-        
+
+            if volume_to_proto:
+                volume_from_proto = volume_to_proto
+
         return DynamicLeverage(
             symbol_id=symbol_info.id,
             symbol_name=symbol,
             tiers=tiers,
-            total_volume=total_volume
+            total_volume=0.0
         )
     
     async def update_margin_call(
