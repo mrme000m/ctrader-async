@@ -272,6 +272,7 @@ class AccountAPI:
                     margin=0.0,
                     free_margin=trader.balance / divisor,
                     currency=currency,
+                    deposit_asset_id=deposit_asset_id,
                     money_digits=money_digits,
                     account_type=account_type,
                     leverage=leverage,

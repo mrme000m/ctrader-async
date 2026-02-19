@@ -428,7 +428,7 @@ class CTraderClient:
             # Optional helper to keep conversion-related tick subscriptions alive
             from .utils.conversion_subscriptions import ConversionSubscriptionManager
             self.conversion_subscriptions = ConversionSubscriptionManager(market_data=self.market_data, tick_store=self.ticks)
-            self.account = AccountAPI(self._protocol, self.config)
+            self.account = AccountAPI(self._protocol, self.config, client=self)
 
             # Provide hook manager to APIs (optional)
             self.trading.hooks = self.hooks

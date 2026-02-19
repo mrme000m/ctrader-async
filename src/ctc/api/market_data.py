@@ -365,7 +365,7 @@ class MarketDataAPI:
         # Try to get from tick store if available via client
         client = getattr(self, '_client', None)
         if client is not None and hasattr(client, 'ticks'):
-            tick = client.ticks.get(symbol)
+            tick = await client.ticks.get(symbol)
             if tick:
                 return tick
         
