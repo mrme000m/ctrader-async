@@ -85,10 +85,10 @@ async def size_from_risk(
     risk_amount = base_amount * (risk_percent / 100.0)
     
     # Get pip value for 1 lot
-    # Try to get converter from client
-    converter = getattr(client, 'conversion_subscriptions', None)
+    # Try to get converter from client (fx_converter or asset_converter)
+    converter = getattr(client, 'fx_converter', None) or getattr(client, 'asset_converter', None)
     if converter is None:
-        logger.error("No asset converter available (client.conversion_subscriptions)")
+        logger.error("No asset converter available (client.fx_converter or client.asset_converter)")
         return None
     
     pip_value_per_lot = await calculate_pip_value(
@@ -158,7 +158,7 @@ async def calculate_position_risk(
         if not sym:
             return None
         
-        converter = getattr(client, 'conversion_subscriptions', None)
+        converter = getattr(client, 'fx_converter', None) or getattr(client, 'asset_converter', None)
         if not converter:
             return None
         

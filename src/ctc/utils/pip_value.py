@@ -5,6 +5,7 @@ Provides functions for calculating pip values in deposit currency.
 
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import TYPE_CHECKING, Optional
 
@@ -13,6 +14,34 @@ if TYPE_CHECKING:
     from .fx_converter import DefaultAssetConverter
 
 logger = logging.getLogger(__name__)
+
+
+def _get_converter_method(converter):
+    """Get the appropriate conversion method from a converter object.
+    
+    Handles:
+    - DefaultAssetConverter (uses convert_async)
+    - Objects with async convert() method
+    - Objects with convert_async() method
+    """
+    if converter is None:
+        return None
+    
+    # Prefer convert_async if available (DefaultAssetConverter)
+    if hasattr(converter, 'convert_async'):
+        return converter.convert_async
+    
+    # Check if convert is async
+    if hasattr(converter, 'convert'):
+        if inspect.iscoroutinefunction(converter.convert):
+            return converter.convert
+        else:
+            # Sync convert - wrap in async
+            async def async_wrapper(*, amount, from_asset, to_asset):
+                return converter.convert(amount=amount, from_asset=from_asset, to_asset=to_asset)
+            return async_wrapper
+    
+    return None
 
 
 async def calculate_pip_value(
@@ -43,7 +72,7 @@ async def calculate_pip_value(
         ...     symbol,
         ...     lots=1.0,
         ...     deposit_currency="USD",
-        ...     converter=client.conversion_subscriptions
+        ...     converter=client.fx_converter
         ... )
         >>> print(f"1 pip = ${pip_val:.2f}")
     """
@@ -88,7 +117,11 @@ async def calculate_pip_value(
             return None
     
     try:
-        converted_value = await converter.convert(
+        convert_method = _get_converter_method(converter)
+        if convert_method is None:
+            logger.error(f"Converter has no convert/convert_async method: {type(converter)}")
+            return None
+        converted_value = await convert_method(
             amount=base_pip_value,
             from_asset=quote_currency,
             to_asset=deposit_currency,

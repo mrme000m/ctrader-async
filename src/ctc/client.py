@@ -21,6 +21,7 @@ from .utils.reconnect import ReconnectManager, ReconnectConfig
 from .utils.metrics import MetricsCollector
 from .utils.stream_registry import StreamRegistry
 from .utils.tick_store import TickStore
+from .utils.fx_converter import DefaultAssetConverter
 from .utils.logging import setup_logging, create_structured_logger
 
 logger = logging.getLogger(__name__)
@@ -424,6 +425,13 @@ class CTraderClient:
             self.risk = RiskAPI(self._protocol, self.config, self.symbols, client=self)
             self.history = HistoryAPI(self._protocol, self.config, self.symbols, client=self)
             self.session = SessionAPI(self._protocol, self.config, client=self)
+            
+            # Initialize asset converter for pip value calculations
+            self.fx_converter = DefaultAssetConverter(
+                symbols=self.symbols,
+                assets=self.assets,
+                ticks=self.ticks,
+            )
 
             # Optional helper to keep conversion-related tick subscriptions alive
             from .utils.conversion_subscriptions import ConversionSubscriptionManager
