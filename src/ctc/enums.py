@@ -33,18 +33,19 @@ class ProtoMappableEnum(Enum):
             ) from exc
     
     @classmethod
-    def from_proto(cls: Type[E], proto_enum_cls: Any, value: int) -> E:
+    def from_proto(cls: Type[E], proto_enum_cls: Any, value: int, *, default: E = None) -> E:
         """Create enum from protobuf enum value.
         
         Args:
             proto_enum_cls: Protobuf enum class
             value: Integer enum value
+            default: Default value to return if not found (optional)
             
         Returns:
-            Enum instance
+            Enum instance, or default if not found
             
         Raises:
-            ValueError: If value not found in enum
+            ValueError: If value not found in enum and no default provided
         """
         # Try items() method first (newer protobuf)
         if hasattr(proto_enum_cls, "items"):
@@ -62,6 +63,9 @@ class ProtoMappableEnum(Enum):
         for name, val in name_to_val.items():
             if val == value and name in cls.__members__:
                 return cls[name]
+        
+        if default is not None:
+            return default
         
         raise ValueError(
             f"Value {value} not found in {cls.__name__} for proto {proto_enum_cls}"

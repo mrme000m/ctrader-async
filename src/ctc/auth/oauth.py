@@ -6,7 +6,14 @@ import asyncio
 import json
 from typing import Any
 from urllib.parse import urlencode
-from urllib.request import urlopen
+
+# Prefer aiohttp when available (non-blocking), fallback to urllib
+try:
+    import aiohttp
+    _HAS_AIOHTTP = True
+except ImportError:
+    _HAS_AIOHTTP = False
+    from urllib.request import urlopen
 
 
 DEFAULT_AUTH_URI = "https://openapi.ctrader.com/apps/auth"
@@ -84,9 +91,17 @@ class OAuthHelper:
         query = urlencode(params)
         url = f"{base_uri}?{query}"
 
-        def _do_request() -> dict[str, Any]:
-            with urlopen(url, timeout=self.timeout) as response:  # nosec B310
-                raw = response.read().decode("utf-8")
-                return json.loads(raw)
+        if _HAS_AIOHTTP:
+            # Use aiohttp for true async (non-blocking)
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout)) as session:
+                async with session.get(url) as response:
+                    raw = await response.text()
+                    return json.loads(raw)
+        else:
+            # Fallback to urllib in thread
+            def _do_request() -> dict[str, Any]:
+                with urlopen(url, timeout=self.timeout) as response:  # nosec B310
+                    raw = response.read().decode("utf-8")
+                    return json.loads(raw)
 
-        return await asyncio.to_thread(_do_request)
+            return await asyncio.to_thread(_do_request)

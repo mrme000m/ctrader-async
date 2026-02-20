@@ -718,18 +718,25 @@ class RiskAPI:
         side: str,
         max_risk_percent: float = 2.0
     ) -> dict:
-        """Validate if a proposed trade meets risk criteria.
+        """Validate margin utilization for a proposed trade.
+        
+        .. warning::
+            This validates **margin usage** (margin/equity ratio), NOT stop-loss 
+            based risk. A 0.01 lot trade can have 0.01% margin used but 10% SL risk.
+            
+            For risk-% validation based on stop-loss, use:
+            ``risk_amount = lots * sl_pips * pip_value_per_lot``
         
         Checks if the trade:
         - Has sufficient margin
-        - Doesn't exceed risk percentage limits
+        - Doesn't exceed margin utilization percentage limits
         - Is within account leverage constraints
         
         Args:
             symbol: Symbol name
             volume: Trade volume in lots
             side: Trade side ("BUY" or "SELL")
-            max_risk_percent: Maximum risk as % of equity (default: 2%)
+            max_risk_percent: Maximum margin utilization as % of equity (default: 2%)
             
         Returns:
             Dict with validation results:

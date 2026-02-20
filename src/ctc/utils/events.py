@@ -42,6 +42,23 @@ class EventBus:
         if handler in self._handlers.get(event_name, []):
             self._handlers[event_name].remove(handler)
 
+    def handlers(self, event_name: str) -> list[EventHandler]:
+        """Get list of registered handlers for an event.
+        
+        Useful for debugging to inspect what's registered.
+        
+        Args:
+            event_name: Event name/topic
+            
+        Returns:
+            List of handler functions
+            
+        Example:
+            >>> handlers = event_bus.handlers("tick.received")
+            >>> print(f"Registered handlers: {len(handlers)}")
+        """
+        return list(self._handlers.get(event_name, []))
+
     async def emit(self, event_name: str, event: Any) -> None:
         handlers = list(self._handlers.get(event_name, []))
         if not handlers:

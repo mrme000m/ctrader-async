@@ -141,8 +141,10 @@ class MarketDataAPI:
         
         Args:
             symbol: Symbol name
-            subscribe_to_timestamp: Request server-side spot timestamps in
-                subscribe payload (``subscribeToSpotTimestamp``)
+            subscribe_to_timestamp: If True, request server-side spot timestamps
+                in subscribe payload (``subscribeToSpotTimestamp``). This provides
+                the exact server timestamp for each tick but increases bandwidth
+                usage by approximately 10%. Default is False.
             
         Returns:
             Async context manager that yields ticks
@@ -151,6 +153,11 @@ class MarketDataAPI:
             >>> async with market_data.stream_ticks("EURUSD") as stream:
             ...     async for tick in stream:
             ...         print(f"Tick: {tick.bid}/{tick.ask}")
+            >>>
+            >>> # With server timestamps
+            >>> async with market_data.stream_ticks("EURUSD", subscribe_to_timestamp=True) as stream:
+            ...     async for tick in stream:
+            ...         print(f"Tick at {tick.timestamp}: {tick.bid}/{tick.ask}")
         """
         from ..streams import TickStream
         s = TickStream(

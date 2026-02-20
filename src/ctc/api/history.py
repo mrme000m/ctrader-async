@@ -11,7 +11,7 @@ Provides methods for:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Union
 from datetime import datetime, timezone, timedelta
 
 from ..models import Deal, Order
@@ -23,6 +23,22 @@ if TYPE_CHECKING:
     from ..api.symbols import SymbolCatalog
 
 logger = logging.getLogger(__name__)
+
+
+def _to_ms(dt: Union[int, datetime, None]) -> Optional[int]:
+    """Convert datetime or int to milliseconds timestamp.
+    
+    Args:
+        dt: datetime object, int (already ms), or None
+        
+    Returns:
+        Milliseconds timestamp or None
+    """
+    if dt is None:
+        return None
+    if isinstance(dt, datetime):
+        return int(dt.timestamp() * 1000)
+    return int(dt)
 
 
 @dataclass
@@ -84,8 +100,8 @@ class HistoryAPI:
     
     async def get_deals(
         self,
-        from_timestamp: Optional[int] = None,
-        to_timestamp: Optional[int] = None,
+        from_timestamp: Optional[Union[int, datetime]] = None,
+        to_timestamp: Optional[Union[int, datetime]] = None,
         days: Optional[int] = None,
         max_rows: int = 1000
     ) -> list[Deal]:
@@ -95,8 +111,8 @@ class HistoryAPI:
         Useful for performance analysis, reporting, and reconciliation.
         
         Args:
-            from_timestamp: Start time in milliseconds (optional)
-            to_timestamp: End time in milliseconds (optional)
+            from_timestamp: Start time in milliseconds or datetime (optional)
+            to_timestamp: End time in milliseconds or datetime (optional)
             days: Get deals from last N days (alternative to timestamps)
             max_rows: Maximum number of deals to return (default: 1000)
             
@@ -123,20 +139,24 @@ class HistoryAPI:
         
         # Calculate timestamps if days specified
         if days is not None:
-            to_timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
-            from_timestamp = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp() * 1000)
+            to_timestamp = datetime.now(timezone.utc)
+            from_timestamp = datetime.now(timezone.utc) - timedelta(days=days)
+        
+        # Convert datetime to milliseconds
+        from_ms = _to_ms(from_timestamp)
+        to_ms = _to_ms(to_timestamp)
         
         # Default to last 30 days if no time range specified
-        if from_timestamp is None:
-            from_timestamp = int((datetime.now(timezone.utc) - timedelta(days=30)).timestamp() * 1000)
-        if to_timestamp is None:
-            to_timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
+        if from_ms is None:
+            from_ms = int((datetime.now(timezone.utc) - timedelta(days=30)).timestamp() * 1000)
+        if to_ms is None:
+            to_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
         
         # Build request
         req = ProtoOADealListReq()
         req.ctidTraderAccountId = self.config.account_id
-        req.fromTimestamp = from_timestamp
-        req.toTimestamp = to_timestamp
+        req.fromTimestamp = from_ms
+        req.toTimestamp = to_ms
         req.maxRows = max_rows
         
         # Send request

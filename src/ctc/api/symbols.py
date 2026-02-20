@@ -145,6 +145,42 @@ class SymbolCatalog:
         async with self._lock:
             return list(self._symbols_by_name.values())
     
+    async def load_all_details(self, concurrency: int = 10) -> None:
+        """Batch-fetch full details for all catalog symbols using gather_limited.
+        
+        This is useful for populating min_volume/max_volume/volume_step for all
+        symbols efficiently without N+1 round trips.
+        
+        Args:
+            concurrency: Maximum concurrent requests (default: 10)
+            
+        Example:
+            >>> await catalog.load_all_details(concurrency=20)
+            >>> symbol = await catalog.get_symbol("EURUSD")
+            >>> print(f"Min volume: {symbol.min_volume}")
+        """
+        from ..utils.concurrency import gather_limited
+        
+        symbols = await self.get_all()
+        
+        # Filter to only symbols missing volume constraints
+        missing = [s for s in symbols if s.min_volume is None]
+        if not missing:
+            return
+        
+        async def fetch_details(symbol: Symbol) -> None:
+            try:
+                await self.get_symbol_details_by_id(symbol.id)
+            except Exception as e:
+                logger.debug(f"Failed to fetch details for {symbol.name}: {e}")
+        
+        await gather_limited(
+            [lambda s=s: fetch_details(s) for s in missing],
+            limit=concurrency,
+        )
+        
+        logger.info(f"Fetched details for {len(missing)} symbols")
+    
     async def search(self, pattern: str) -> list[Symbol]:
         """Search symbols by pattern.
         

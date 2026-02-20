@@ -268,21 +268,14 @@ class CandleStream:
     
     async def __anext__(self) -> Candle:
         """Get next candle update."""
-        if not self._active:
-            raise StopAsyncIteration
-        
-        try:
-            # Wait for next candle with timeout
-            candle = await asyncio.wait_for(
-                self._queue.get(),
-                timeout=300.0  # 5 minutes timeout (longer than tick timeout)
-            )
-            return candle
-        except asyncio.TimeoutError:
-            if self._active:
-                # Still active but no data - continue waiting
-                return await self.__anext__()
-            raise StopAsyncIteration
-        except Exception as e:
-            logger.error(f"Error in candle stream: {e}", exc_info=True)
-            raise StopAsyncIteration
+        while self._active:
+            try:
+                # Wait for next candle with timeout
+                return await asyncio.wait_for(
+                    self._queue.get(),
+                    timeout=300.0  # 5 minutes timeout (longer than tick timeout)
+                )
+            except asyncio.TimeoutError:
+                # Timeout - continue waiting if still active
+                continue
+        raise StopAsyncIteration

@@ -26,18 +26,32 @@ class ConversionSubscriptionManager:
     tick_store: TickStore
 
     _tasks: dict[str, asyncio.Task]
+    _events: any = None
+    _subscribed_symbols: set[str] = None
 
-    def __init__(self, *, market_data: any, tick_store: TickStore):
+    def __init__(self, *, market_data: any, tick_store: TickStore, events=None):
         self.market_data = market_data
         self.tick_store = tick_store
         self._tasks = {}
+        self._events = events
+        self._subscribed_symbols = set()
+        if events is not None:
+            events.on("reconnect.success", self._on_reconnect)
 
     def ensure(self, symbols: Iterable[str]) -> None:
         for s in symbols:
             sym = str(s).upper()
+            self._subscribed_symbols.add(sym)
             if sym in self._tasks and not self._tasks[sym].done():
                 continue
             self._tasks[sym] = asyncio.create_task(self._run(sym))
+
+    async def _on_reconnect(self, _evt=None) -> None:
+        """Restart tasks after reconnect."""
+        active = list(self._subscribed_symbols)
+        self._tasks.clear()
+        self.ensure(active)
+        logger.debug("ConversionSubscriptionManager restarted after reconnect")
 
     async def stop(self) -> None:
         for t in list(self._tasks.values()):

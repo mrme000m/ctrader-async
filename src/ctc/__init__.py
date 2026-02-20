@@ -73,6 +73,23 @@ from .utils.errors import (
 )
 from .auth import OAuthHelper
 
+# Account-related classes
+from .api.account import FullAccountInfo, CashFlowEntry, CashFlowType
+
+# Risk-related classes
+from .api.risk import LeverageTier, DynamicLeverage
+
+# Asset catalog
+from .api.assets import AssetCatalog
+
+# Utility classes
+from .utils.tick_store import TickStore
+from .utils.fx_converter import DefaultAssetConverter
+from .utils.conversion_subscriptions import ConversionSubscriptionManager
+
+# Additional exceptions
+from .utils.errors import PositionError, TimeoutError, ProtocolError, ConfigurationError
+
 # Bot/agent utilities
 from .utils import (
     EventBus,
@@ -103,6 +120,12 @@ from .utils import (
     get_debug_status,
     log_calls,
 )
+
+# New utilities
+from .utils.pip_value import calculate_pip_value
+from .utils.position_sizer import size_from_risk, calculate_position_risk
+from .utils.symbol_search import resolve_symbol, find_similar_symbols
+from .utils.health import HealthStatus, get_health
 
 # Optional integrations (only available if dependencies installed)
 try:
@@ -162,7 +185,28 @@ __all__ = [
     "RateLimitError",
     "SymbolNotFoundError",
     "OrderError",
+    "PositionError",
+    "TimeoutError",
+    "ProtocolError",
+    "ConfigurationError",
     "OAuthHelper",
+    
+    # Account-related classes
+    "FullAccountInfo",
+    "CashFlowEntry",
+    "CashFlowType",
+    
+    # Risk-related classes
+    "LeverageTier",
+    "DynamicLeverage",
+    
+    # Asset catalog
+    "AssetCatalog",
+    
+    # Utility classes
+    "TickStore",
+    "DefaultAssetConverter",
+    "ConversionSubscriptionManager",
 
     # Bot/agent utilities
     "EventBus",
@@ -193,6 +237,15 @@ __all__ = [
     "set_debug_mode",
     "get_debug_status",
     "log_calls",
+    
+    # New utilities
+    "calculate_pip_value",
+    "size_from_risk",
+    "calculate_position_risk",
+    "resolve_symbol",
+    "find_similar_symbols",
+    "HealthStatus",
+    "get_health",
     
     # BetterStack integration (optional)
     "BetterStackHandler",

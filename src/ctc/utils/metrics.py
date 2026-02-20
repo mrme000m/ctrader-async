@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 
 @dataclass
@@ -41,6 +41,11 @@ class MetricsSnapshot:
     # reconnect
     reconnect_attempts: int = 0
     reconnect_successes: int = 0
+
+    @property
+    def avg_latency(self) -> Optional[float]:
+        """Average request latency in seconds. None if no requests recorded."""
+        return self.latency_sum / self.latency_count if self.latency_count else None
 
 
 @dataclass
@@ -147,3 +152,34 @@ class MetricsCollector:
 
     async def on_reconnect_success(self, _evt: Any) -> None:
         self._reconnect_successes += 1
+
+    # ---- attach/detach helpers ----
+    def attach(self, client: "CTraderClient") -> None:
+        """Attach metrics collector to a client.
+
+        Registers all necessary hooks and event handlers.
+
+        Example:
+            >>> collector = MetricsCollector()
+            >>> collector.attach(client)
+            >>> # ... later
+            >>> snap = collector.snapshot()
+        """
+        client.hooks.register("protocol.post_send_request", self.on_post_send_request)
+        client.hooks.register("protocol.post_response", self.on_post_response)
+        client.events.on("transport.inbound_dropped", self.on_inbound_dropped)
+        client.events.on("tick.dropped", self.on_tick_dropped)
+        client.events.on("reconnect.attempt", self.on_reconnect_attempt)
+        client.events.on("reconnect.success", self.on_reconnect_success)
+
+    def detach(self, client: "CTraderClient") -> None:
+        """Detach metrics collector from a client.
+
+        Unregisters all hooks and event handlers.
+        """
+        client.hooks.unregister("protocol.post_send_request", self.on_post_send_request)
+        client.hooks.unregister("protocol.post_response", self.on_post_response)
+        client.events.off("transport.inbound_dropped", self.on_inbound_dropped)
+        client.events.off("tick.dropped", self.on_tick_dropped)
+        client.events.off("reconnect.attempt", self.on_reconnect_attempt)
+        client.events.off("reconnect.success", self.on_reconnect_success)

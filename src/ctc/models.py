@@ -74,7 +74,8 @@ class Symbol:
         if isinstance(self.pip_position, int) and self.pip_position >= 0:
             return 10 ** (-int(self.pip_position))
         d = int(self.digits or 5)
-        return 10 ** (-(d - 1)) if d >= 3 else 10 ** (-d)
+        # Guard: for CFDs with 0-1 digits, don't subtract 1
+        return 10 ** (-(d - 1)) if d >= 2 else 10 ** (-d)
     
     def round_price(self, price: float) -> float:
         """Round price to symbol's digit precision."""
