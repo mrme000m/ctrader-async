@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Live candles (ProtoOALiveTrendbarEvent)** – new `CandleStream`
+  class and associated market_data helpers for full real‑time candlestick
+  updates.  Implements subscription/unsubscription messages and delta‑
+  decoding of trendbar payloads.
+
 #### Session & Authentication
 - **Token Refresh** - Automatic and manual token refresh support
   - `session.refresh_token()` - Refresh access token via protobuf API

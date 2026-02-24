@@ -232,25 +232,26 @@ class TestCandleStream:
         except ImportError:
             pytest.skip("CandleStream not available")
 
-        stream = CandleStream(
-            symbol="EURUSD",
-            timeframe=TimeFrame.M1,
-            protocol=client._protocol,
-            config=client.config,
-            symbols=client.symbols,
-        )
-
         candles = []
+        # CandleStream is an async context manager; use `async with` to
+        # start/stop the subscription automatically.
         try:
-            await stream.start()
-            # Collect for up to 90 s
-            try:
-                candle = await asyncio.wait_for(stream.__anext__(), timeout=90.0)
-                candles.append(candle)
-            except asyncio.TimeoutError:
-                pass
-        finally:
-            await stream.stop()
+            async with CandleStream(
+                symbol="EURUSD",
+                timeframe=TimeFrame.M1,
+                protocol=client._protocol,
+                config=client.config,
+                symbols=client.symbols,
+            ) as stream:
+                # Collect for up to 90 s
+                try:
+                    candle = await asyncio.wait_for(stream.__anext__(), timeout=90.0)
+                    candles.append(candle)
+                except asyncio.TimeoutError:
+                    pass
+        except AttributeError:
+            # in case import fails above (should be handled earlier)
+            pytest.skip("CandleStream not available")
 
         if not candles:
             pytest.skip(

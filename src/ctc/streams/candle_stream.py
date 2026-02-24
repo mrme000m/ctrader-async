@@ -91,7 +91,10 @@ class CandleStream:
         try:
             from ..messages.OpenApiMessages_pb2 import (
                 ProtoOASubscribeLiveTrendbarReq,
-                ProtoOALiveTrendbarEvent,
+                # live candle updates are delivered in the generic spot event
+                # message; the payload contains a `trendbar` field when the
+                # server pushes candle data.
+                ProtoOASpotEvent,
             )
             from ..transport import ProtocolFraming
 
@@ -104,7 +107,10 @@ class CandleStream:
             self._symbol_info = symbol_info
 
             # Register handler using the dispatcher API (same pattern as TickStream)
-            _sentinel = ProtoOALiveTrendbarEvent()
+            # use a spot event sentinel since that's what the server actually
+            # sends for live trendbar updates (it nests them inside
+            # ProtoOASpotEvent.trendbar)
+            _sentinel = ProtoOASpotEvent()
             self._payload_type = _sentinel.payloadType
 
             self.protocol.dispatcher.register(
@@ -165,7 +171,8 @@ class CandleStream:
             logger.error(f"Failed to unsubscribe from live candles: {e}", exc_info=True)
 
     async def _on_trendbar(self, envelope):
-        """Handle incoming ProtoOALiveTrendbarEvent."""
+        """Handle incoming live trendbar payloads embedded in a
+        ProtoOASpotEvent."""
         try:
             from ..transport import ProtocolFraming
             payload = ProtocolFraming.extract_payload(envelope)
