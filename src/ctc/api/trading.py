@@ -1440,7 +1440,6 @@ class TradingAPI:
                 req.ctidTraderAccountId = self.config.account_id
                 req.fromTimestamp = from_timestamp
                 req.toTimestamp = to_timestamp
-                req.maxRows = min(100, max_rows - len(orders))  # Request in chunks
                 
                 # Send request
                 response = await self.protocol.send_request(
@@ -1455,7 +1454,11 @@ class TradingAPI:
                 # Parse orders
                 if hasattr(response, 'order'):
                     for order_proto in response.order:
-                        symbol_id = getattr(order_proto, 'tradeData', {}).get('symbolId', None) if hasattr(order_proto, 'tradeData') else None
+                        symbol_id = (
+                            order_proto.tradeData.symbolId
+                            if hasattr(order_proto, 'tradeData') and hasattr(order_proto.tradeData, 'symbolId')
+                            else None
+                        )
                         
                         # Get symbol info
                         symbol_info = None
