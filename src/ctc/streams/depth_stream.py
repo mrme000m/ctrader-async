@@ -269,14 +269,22 @@ class DepthStream:
             timestamp=int(time.time() * 1000),
         )
     
-    async def resubscribe(self):
-        """Resubscribe after reconnection."""
-        if self._active:
-            # Clear existing state
-            self._bids.clear()
-            self._asks.clear()
-            self._subscribed = False
-            await self._subscribe()
+    async def resubscribe(self, protocol, symbols) -> None:
+        """Resubscribe after reconnection (best-effort)."""
+        if not self._active or not self._subscribed:
+            return
+
+        try:
+            await self._unsubscribe()
+        except Exception:
+            pass
+
+        self.protocol = protocol
+        self.symbols = symbols
+        self._bids.clear()
+        self._asks.clear()
+        self._subscribed = False
+        await self._subscribe()
     
     def __aiter__(self):
         """Return async iterator."""

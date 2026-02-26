@@ -6,13 +6,37 @@ actual cTrader API usage in the ctc codebase.
 """
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+import types
+import importlib.util
 
-from ctc.messages import (
-    OpenApiMessages_pb2 as M,
-    OpenApiModelMessages_pb2 as MM,
-    OpenApiCommonMessages_pb2 as CM,
-    OpenApiCommonModelMessages_pb2 as CMM,
+
+def _load_module(path: str, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+ROOT = os.path.dirname(__file__)
+sys.modules.setdefault("ctc", types.ModuleType("ctc"))
+sys.modules.setdefault("ctc.messages", types.ModuleType("ctc.messages"))
+
+CMM = _load_module(
+    os.path.join(ROOT, "src", "ctc", "messages", "OpenApiCommonModelMessages_pb2.py"),
+    "ctc.messages.OpenApiCommonModelMessages_pb2",
+)
+CM = _load_module(
+    os.path.join(ROOT, "src", "ctc", "messages", "OpenApiCommonMessages_pb2.py"),
+    "ctc.messages.OpenApiCommonMessages_pb2",
+)
+MM = _load_module(
+    os.path.join(ROOT, "src", "ctc", "messages", "OpenApiModelMessages_pb2.py"),
+    "ctc.messages.OpenApiModelMessages_pb2",
+)
+M = _load_module(
+    os.path.join(ROOT, "src", "ctc", "messages", "OpenApiMessages_pb2.py"),
+    "ctc.messages.OpenApiMessages_pb2",
 )
 
 

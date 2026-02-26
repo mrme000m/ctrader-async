@@ -338,7 +338,7 @@ class RiskAPI:
         pnl_entries = list(getattr(response, 'positionUnrealizedPnL', []) or [])
         entry = next(
             (e for e in pnl_entries if getattr(e, 'positionId', None) == position_id),
-            pnl_entries[0] if pnl_entries else None,
+            None,
         )
 
         if entry is None:
